@@ -19,7 +19,7 @@ npm run dev
 
 `dev` abre a interface local. Não conecte testes a bancos ou canais reais. Testes padrão usam simulações. As configurações privadas ficam na VPS, fora do Git.
 
-Depois de validar, faça commit e push para `main`. A publicação exige checkout limpo e a mesma revisão no GitHub:
+Depois de validar, integre a alteração à `main` por pull request. A publicação exige checkout limpo e a mesma revisão no GitHub:
 
 ```sh
 npm run publicar
