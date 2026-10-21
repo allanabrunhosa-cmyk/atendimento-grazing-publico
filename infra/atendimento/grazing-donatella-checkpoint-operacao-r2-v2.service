@@ -1,0 +1,25 @@
+[Unit]
+Description=Donatella V2 - checkpoint externo dos bancos operacionais e anexos
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+TimeoutStartSec=55min
+# Caminhos e ambiente são definidos em drop-in privado antes da instalação.
+ExecStart=/bin/sh -c 'exec "$${ATENDIMENTO_ROTINA_CHECKPOINT_OPERACAO:?ATENDIMENTO_ROTINA_CHECKPOINT_OPERACAO_OBRIGATORIA}"'
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+# A tmpfs deve estar no namespace do host para o bind do daemon Docker.
+# Não habilitar PrivateTmp/ProtectSystem: esconderiam o mount do daemon.
+MemoryMax=3072M
+CPUQuota=25%
+TasksMax=64
+# O script confere bancos exclusivos, espaço livre mínimo de 10 GiB,
+# teto de 2 GiB/9.000 arquivos e reserva de 8 GiB de RAM; usa flock.
+# O limite do serviço inclui os bytes da tmpfs de fontes. Não toca envios/origem.
+# O spool cifrado/recibos ficam preservados após sucesso; não há exclusão.
+# Só fontes/estágio intermediário em tmpfs desaparecem ao desmontar/terminar.

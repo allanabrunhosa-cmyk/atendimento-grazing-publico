@@ -1,0 +1,15 @@
+.modal-lembrete-followup .lembrete-followup-cabecalho{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px}
+.modal-lembrete-followup .lembrete-followup-cabecalho [data-slot=dialog-title]{display:flex;align-items:center;gap:8px;margin:0}
+.modal-lembrete-followup .lembrete-followup-contato{overflow-wrap:anywhere}
+.modal-lembrete-followup .lembrete-followup-form{display:grid;gap:16px;min-width:0}
+.modal-lembrete-followup .lembrete-followup-form label{display:grid;gap:8px;min-width:0}
+.modal-lembrete-followup .lembrete-followup-form .field{width:100%;min-width:0}
+.modal-lembrete-followup .lembrete-followup-descricao{min-height:88px;max-height:240px;resize:vertical}
+.modal-lembrete-followup .muted,.modal-lembrete-followup .lembrete-followup-atual p{margin:0;line-height:1.5}
+.modal-lembrete-followup .lembrete-followup-atual{display:flex;align-items:flex-start;gap:12px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+.modal-lembrete-followup .lembrete-followup-atual>svg{flex-shrink:0}
+.modal-lembrete-followup .lembrete-followup-atual>div{display:grid;gap:4px;min-width:0;overflow-wrap:anywhere}
+.modal-lembrete-followup .lembrete-followup-atalhos,.modal-lembrete-followup .lembrete-followup-acoes{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.modal-lembrete-followup .lembrete-followup-acoes{justify-content:space-between;padding-top:16px;border-top:1px solid var(--border)}
+.modal-lembrete-followup .lembrete-followup-rodape{justify-content:flex-end;flex-wrap:wrap;gap:8px}
+.modal-lembrete-followup .lembrete-followup-erro{margin:0;color:var(--danger);font-size:.85rem;line-height:1.5;overflow-wrap:anywhere}

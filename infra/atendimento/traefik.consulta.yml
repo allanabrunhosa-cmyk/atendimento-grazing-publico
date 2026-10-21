@@ -1,0 +1,18 @@
+http:
+  routers:
+    donatella-consulta-http:
+      rule: Host(`atendimento.grazinghub.com.br`)
+      entryPoints: [web]
+      middlewares: [redirect-to-https]
+      service: donatella-consulta-v2
+    donatella-consulta-https:
+      rule: Host(`atendimento.grazinghub.com.br`)
+      entryPoints: [websecure]
+      service: donatella-consulta-v2
+      tls: {certResolver: letsencrypt}
+  services:
+    donatella-consulta-v2:
+      loadBalancer:
+        servers:
+          - url: http://grazing-donatella-consulta-v2:3000
+        passHostHeader: true

@@ -1,0 +1,11 @@
+[Unit]
+Description=Donatella V2 - verificar R2 semanalmente e apos reinicio da VPS
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=7d
+AccuracySec=1min
+Unit=grazing-donatella-verificar-r2-v2.service
+
+[Install]
+WantedBy=timers.target

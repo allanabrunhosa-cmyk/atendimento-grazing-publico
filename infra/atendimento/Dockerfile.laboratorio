@@ -1,0 +1,7 @@
+ARG BASE=grazing-donatella-preview-base-v2:d377f5445bec
+FROM ${BASE}
+WORKDIR /laboratorio
+ENV NODE_ENV=production
+USER node
+ENTRYPOINT ["node", "/laboratorio/laboratorio.mjs"]
+CMD []

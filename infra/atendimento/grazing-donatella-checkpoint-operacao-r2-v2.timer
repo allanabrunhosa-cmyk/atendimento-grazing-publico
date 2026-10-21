@@ -1,0 +1,11 @@
+[Unit]
+Description=Donatella V2 - checkpoint operacional externo a cada hora
+
+[Timer]
+OnCalendar=*-*-* *:00:00 UTC
+RandomizedDelaySec=5min
+Persistent=true
+Unit=grazing-donatella-checkpoint-operacao-r2-v2.service
+
+[Install]
+WantedBy=timers.target

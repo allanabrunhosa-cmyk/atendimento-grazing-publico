@@ -1,0 +1,67 @@
+name: grazing-donatella-consulta-v2
+services:
+  coletor:
+    image: grazing-donatella-consulta-v2:20261008-a
+    container_name: grazing-donatella-coletor-v2
+    command: [/release/iniciar-runtime.mjs, supervisionar]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    cpus: 1
+    pids_limit: 128
+    volumes:
+      - ${ATENDIMENTO_RAIZ_REMOTA_HOMOLOGACAO:?raiz privada da homologacao}/release:/release:ro
+      - ${ATENDIMENTO_CONFIG_COLETOR:?configuracao privada do coletor}:/run/secrets/coletor.json:ro
+      - ${ATENDIMENTO_INDICE_MIDIA:?indice privado de midia}:/run/secrets/media-index.json:ro
+      - ${ATENDIMENTO_MIDIA_ORIGEM:?midia privada preservada}:/midia:ro
+      - estado:/estado
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    networks: [privada,saida]
+    healthcheck:
+      test: [CMD, node, /release/saude-coletor.mjs]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+  consulta:
+    image: grazing-donatella-consulta-v2:20261008-a
+    container_name: grazing-donatella-consulta-v2
+    command: [/release/consulta.mjs]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+    volumes:
+      - ${ATENDIMENTO_RAIZ_REMOTA_HOMOLOGACAO:?raiz privada da homologacao}/release:/release:ro
+      - ${ATENDIMENTO_RAIZ_REMOTA_HOMOLOGACAO:?raiz privada da homologacao}/consulta/consulta.json:/run/secrets/consulta.json:ro
+      - ${ATENDIMENTO_RAIZ_REMOTA_HOMOLOGACAO:?raiz privada da homologacao}/consulta/conta-hub.json:/run/secrets/conta-hub.json:ro
+      - ${ATENDIMENTO_INDICE_MIDIA:?indice privado de midia}:/run/secrets/media-index.json:ro
+      - ${ATENDIMENTO_MIDIA_ORIGEM:?midia privada preservada}:/midia:ro
+      - estado:/incrementais:ro
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    networks: [privada,proxy]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://localhost:3000/saude').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+volumes:
+  estado:
+    external: true
+    name: grazing-donatella-coletor-v2-estado
+networks:
+  privada:
+    external: true
+    name: grazing-donatella-homologacao-v2-privada
+  proxy:
+    external: true
+    name: dokploy-network
+  saida:
+    name: grazing-donatella-coletor-v2-saida

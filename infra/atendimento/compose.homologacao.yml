@@ -1,0 +1,44 @@
+name: grazing-donatella-homologacao-v2
+# Preparação privada de dados; não publica telas, jobs, IA ou envio.
+services:
+  banco:
+    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    container_name: grazing-donatella-homologacao-v2-banco
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 2
+    shm_size: 128m
+    environment:
+      POSTGRES_USER: donatella_homologacao_admin
+      POSTGRES_DB: donatella_preparacao
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    secrets:
+      - postgres
+    volumes:
+      - banco:/var/lib/postgresql/data
+    networks:
+      - privada
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U donatella_homologacao_admin -d donatella_preparacao"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    labels:
+      grazing.tarefa: donatella-migracao-v2
+      grazing.finalidade: preparacao-privada
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+secrets:
+  postgres:
+    file: ${ATENDIMENTO_RAIZ_REMOTA_HOMOLOGACAO:?raiz privada da homologacao}/postgres.secret
+volumes:
+  banco:
+    name: grazing-donatella-homologacao-v2-banco
+networks:
+  privada:
+    name: grazing-donatella-homologacao-v2-privada
+    internal: true

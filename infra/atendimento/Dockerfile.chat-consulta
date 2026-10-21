@@ -1,0 +1,7 @@
+ARG BASE=grazing-donatella-preview-base-v2:d377f5445bec
+FROM ${BASE}
+WORKDIR /chat-consulta
+ENV NODE_ENV=production
+USER node
+ENTRYPOINT ["node", "/chat-consulta/chat-consulta.mjs"]
+CMD []

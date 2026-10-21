@@ -1,0 +1,21 @@
+import {describe,it,expect,vi} from 'vitest';
+import {validarEdicaoContatoOperacao,contatoDTO} from '../../src/lib/atendimento/operacao-contatos';
+import {validarTemplateOperacao} from '../../src/lib/atendimento/operacao-templates';
+import {previaTemplateOperacao,textoTemplateEnviadoOperacao} from '../../src/lib/atendimento/operacao-modelos';
+import {conteudoMensagemOperacao,hashOperacao} from '../../src/lib/atendimento/operacao-repositorio-pg';
+import {escritaChatPermitida} from '../../src/lib/atendimento/operacao-chat-minimo';
+vi.mock('server-only',()=>({}));
+const id='11111111-1111-4111-8111-111111111111';
+const contato=()=>({id,idempotencia:id,versao:1,nome:'Contato fictício',email:'teste@example.com',descricao:'Cargo · Empresa fictícia',classificacao:'lead',tags:['Fictício'],notas:'Notas fictícias'});
+const modelo=()=>({nome:'retomar_atendimento',idioma:'pt_BR',categoria:'UTILITY',versao:0,idempotencia:id,componentes:[{type:'HEADER',format:'TEXT',text:'Olá {{1}}',example:{header_text:['Pessoa fictícia']}},{type:'BODY',text:'Podemos retomar {{1}}?',example:{body_text:[['Assunto fictício']]}}]});
+describe('contatos e templates',()=>{
+ it('aceita os dados editáveis e mantém classificação confirmada pelo HUB',()=>{expect(()=>validarEdicaoContatoOperacao(contato())).not.toThrow();expect(contatoDTO({hub_cliente_id:'cliente-fixture',classificacao:'lead'}).classificacao).toBe('cliente');});
+ it.each(['telefone','identidade_canal','hubClienteId','memoria','autorId'])('recusa alteração de %s no contato',campo=>{expect(()=>validarEdicaoContatoOperacao({...contato(),[campo]:'alterado'})).toThrow('CAMPO_INVALIDO');});
+ it.each([{nome:'a'.repeat(201)},{descricao:'a'.repeat(201)},{descricao:'Duas\nlinhas'},{email:'email inválido'},{classificacao:'prospect'},{tags:['a'.repeat(61)]},{notas:'a'.repeat(8001)}])('recusa campos fora do domínio: %j',p=>{expect(()=>validarEdicaoContatoOperacao({...contato(),...p})).toThrow();});
+ it('gera a prévia e o texto persistido com cabeçalho e corpo separados',()=>{const m=modelo();expect(previaTemplateOperacao(m.componentes,{'header:1':'Ana','1':'o pedido'})).toBe('Olá Ana\n\nPodemos retomar o pedido?');expect(textoTemplateEnviadoOperacao(m,['Ana','o pedido'])).toBe('Olá Ana\n\nPodemos retomar o pedido?');});
+ it('não troca variáveis nem interpreta HTML na prévia',()=>{expect(previaTemplateOperacao([{type:'BODY',text:'Olá {{1}}, {{2}}'}],{'1':'<script>','2':'{{1}}'})).toBe('Olá <script>, {{1}}');});
+ it('valida exemplos, variáveis, nome e idioma antes de tocar a Meta',()=>{expect(()=>validarTemplateOperacao(modelo())).not.toThrow();for(const p of [{nome:'Nome inválido'},{idioma:'pt-BR'},{componentes:[{type:'BODY',text:'Olá {{2}}'}]},{componentes:[{type:'BODY',text:'Olá {{1}}'}]}])expect(()=>validarTemplateOperacao({...modelo(),...p})).toThrow();});
+ it('mostra templates antigos com snapshot; conserva o texto já gravado',()=>{const m=modelo();expect(conteudoMensagemOperacao({tipo:'template',conteudo:'',metadados:{template:{...m,variaveis:['Ana','o pedido']}}})).toContain('Olá Ana');expect(conteudoMensagemOperacao({tipo:'template',conteudo:'Texto original'})).toBe('Texto original');});
+ it('reconstrói intenção antiga somente com o mesmo contrato; divergência mostra os valores sem inventar o corpo',()=>{const m=modelo(),base={tipo:'template',conteudo:'',template_nome:m.nome,template_idioma:m.idioma,template_componentes:m.componentes};const envio={variaveis:['Ana','o pedido'],modeloHash:hashOperacao({nome:m.nome,idioma:m.idioma,componentes:m.componentes.map(c=>Object.fromEntries(Object.entries(c).sort()))})};expect(conteudoMensagemOperacao({...base,envio_template:{...envio,modeloHash:'divergente'}})).toContain('Valores enviados: Ana · o pedido');});
+ it('permite apenas as quatro novas escritas humanas sem habilitar IA ou Woo',()=>{for(const p of ['/contatos/editar','/templates/salvar','/templates/excluir','/templates/sincronizar'])expect(escritaChatPermitida(p,{})).toBe(true);expect(escritaChatPermitida('/configuracao',{})).toBe(false);expect(escritaChatPermitida('/woocommerce',{})).toBe(false);});
+});

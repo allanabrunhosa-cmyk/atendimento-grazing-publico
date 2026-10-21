@@ -1,0 +1,21 @@
+import {it,expect,vi,afterEach} from 'vitest';
+import {assinaturaHumanaOperacao,textoAssinadoOperacao} from '../../src/lib/atendimento/operacao-assinatura-humana';
+import {transportarOperacao,type IntencaoOperacao} from '../../src/lib/atendimento/operacao-envio';
+import type {RepositorioOperacaoPg} from '../../src/lib/atendimento/operacao-repositorio-pg';
+vi.mock('server-only',()=>({}));
+afterEach(()=>vi.unstubAllEnvs());
+it('identifica o atendente e preserva texto, emoji e linhas',()=>{expect(textoAssinadoOperacao({autor:'humano',tipo:'text',assinaturaHumana:'Nome Fictício',texto:'Olá 🙂\nTudo bem?'})).toBe('*Nome Fictício*\nOlá 🙂\nTudo bem?');});
+it('normaliza o nome da sessão e impede formatação/injeção de linhas',()=>{expect(assinaturaHumanaOperacao('  Nome*\n_Fictício\u202e  ')).toBe('Nome Fictício');expect(()=>assinaturaHumanaOperacao(' \n ')).toThrow('OPERACAO_NOME_ATENDENTE_INVALIDO');});
+it.each(['image','video','document'])('assina a legenda de %s mesmo sem texto',tipo=>{expect(textoAssinadoOperacao({autor:'humano',tipo,assinaturaHumana:'Nome Fictício'})).toBe('*Nome Fictício*');});
+it.each(['audio','sticker','template'])('não fabrica legenda ou novo envio em %s',tipo=>{expect(textoAssinadoOperacao({autor:'humano',tipo,assinaturaHumana:'Nome Fictício',texto:'Original'})).toBe('Original');});
+it.each(['ia','automacao'])('não altera assinatura de %s',autor=>{expect(textoAssinadoOperacao({autor,tipo:'text',assinaturaHumana:'Nome Fictício',texto:'Original'})).toBe('Original');});
+it('preserva intenções antigas sem reescrever hashes e limita o payload completo',()=>{expect(textoAssinadoOperacao({autor:'humano',tipo:'text',texto:'Legado'})).toBe('Legado');expect(()=>textoAssinadoOperacao({autor:'humano',tipo:'text',texto:'x'.repeat(4096),assinaturaHumana:'Nome'})).toThrow('OPERACAO_TEXTO_ASSINADO_GRANDE');expect(()=>textoAssinadoOperacao({autor:'humano',tipo:'image',texto:'x'.repeat(1024),assinaturaHumana:'Nome'})).toThrow('OPERACAO_LEGENDA_GRANDE');});
+it('transporta a assinatura congelada em um único POST e mantém a citação',async()=>{
+ vi.stubEnv('ATENDIMENTO_ENVIO_HABILITADO','true');vi.stubEnv('ATENDIMENTO_AUTORIDADE_ENVIO','vps');
+ const p={conversaId:'11111111-1111-4111-8111-111111111111',versao:1,idempotencia:'22222222-2222-4222-8222-222222222222',tipo:'text' as const,texto:'Olá 🙂',citadaId:'33333333-3333-4333-8333-333333333333',autor:'humano' as const,assinaturaHumana:'Nome congelado',ficticia:false,telefone:'5511000000000',autorContexto:{id:'fixture',perfilId:'fixture',sessaoVersao:1}};
+ const t={id:p.idempotencia,conteudo:p} as IntencaoOperacao;
+ const repo={modo:()=> 'operacao',pool:{query:async()=>({rows:[{wamid:'wamid.citacao'}]})}} as unknown as RepositorioOperacaoPg;
+ const fetcher=vi.fn<typeof fetch>(async()=>new Response(JSON.stringify({messaging_product:'whatsapp',messages:[{id:'wamid.fixture'}]}),{status:200}));
+ const r=await transportarOperacao(repo,t,{autoridade:'vps',enviosHabilitados:true,token:'fixture-sem-valor',numeroId:'123456789',versao:'v23.0',escopoOperacional:'chat_humano',corteMinimoChat:{fase:'humano'}} as never,{id:'fixture',nome:'Nome alterado depois',perfilId:'fixture',sessaoVersao:1,permissoes:['atender']},async()=>true,fetcher);
+ expect(r.estado).toBe('aceito');expect(fetcher).toHaveBeenCalledOnce();expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({text:{body:'*Nome congelado*\nOlá 🙂'},context:{message_id:'wamid.citacao'}});expect(p.texto).toBe('Olá 🙂');
+});

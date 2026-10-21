@@ -1,0 +1,21 @@
+// Cliente SQL da camada de coleta. Não contém cadastros do HUB.
+// As tabelas existentes são mantidas pelo SQL manual em scripts/atendimento/sql.
+generator client {
+  provider = "prisma-client"
+  output = "../src/generated/prisma"
+}
+datasource db {
+  provider = "postgresql"
+  schemas = ["atendimento_migracao"]
+}
+model CargaDocumento {
+  execucao String @db.Uuid
+  id String @db.Uuid
+  tipo String
+  hash String
+  cifrado String
+  recebidoEm DateTime @default(now()) @map("recebido_em") @db.Timestamptz
+  @@id([execucao, id])
+  @@map("carga_documento")
+  @@schema("atendimento_migracao")
+}

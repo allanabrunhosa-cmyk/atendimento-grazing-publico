@@ -1,0 +1,19 @@
+[Unit]
+Description=Donatella V2 - releitura integral do ponto R2 existente
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+TimeoutStartSec=45min
+# Fontes privadas são obrigatórias no drop-in local.
+ExecStartPre=/usr/bin/test -n "${ATENDIMENTO_RELEASE_VERIFICADOR_R2}"
+ExecStartPre=/usr/bin/test -n "${ATENDIMENTO_CONFIG_VERIFICADOR_R2}"
+ExecStart=/usr/bin/docker run --rm --name grazing-donatella-verificar-r2-v2 --label grazing.finalidade=verificar-r2-v2 --read-only --cap-drop ALL --security-opt no-new-privileges --memory 384m --cpus 0.5 --pids-limit 64 --network grazing-donatella-coletor-v2-saida --mount type=bind,src=${ATENDIMENTO_RELEASE_VERIFICADOR_R2},dst=/release,readonly --mount type=bind,src=${ATENDIMENTO_CONFIG_VERIFICADOR_R2},dst=/run/secrets/verificador-r2.json,readonly --mount type=volume,src=grazing-donatella-coletor-v2-estado,dst=/estado --tmpfs /tmp:rw,noexec,nosuid,size=16m grazing-donatella-consulta-v2:20261008-a /release/verificar-backup-r2.mjs
+StandardOutput=journal
+StandardError=journal
+
+# Esta unidade NAO cria backups novos nem altera o banco/origem.
+# A falha fica visivel no systemd e no diario privado de verificacao.

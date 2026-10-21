@@ -1,0 +1,10 @@
+# Imagem local já verificada. A partida ignora inteiramente migrations, jobs e o HUB.
+# Conferir o ID d377f5445beccc03ee3f090cd250013232d6ba3ed90014ca94001d8ccf26e259
+# e criar este alias local antes de compilar: BuildKit interpreta IDs crus como registry.
+ARG BASE=grazing-donatella-preview-base-v2:d377f5445bec
+FROM ${BASE}
+WORKDIR /preview
+ENV NODE_ENV=production
+USER node
+ENTRYPOINT ["node", "/preview/preview.mjs"]
+CMD []

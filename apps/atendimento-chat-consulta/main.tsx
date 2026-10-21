@@ -1,0 +1,11 @@
+import {ThemeProvider} from '../../src/components/theme-provider';
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import ChatConsulta from './ChatConsulta';
+import ChatOperacao from './ChatOperacao';
+import { aplicarIdentidadePreview } from '../atendimento/preview/identidade';
+import '../atendimento/preview/preview.css';
+import './consulta.css';
+import './operacao.css';
+aplicarIdentidadePreview(document.documentElement);
+createRoot(document.getElementById('root')!).render(<React.StrictMode><ThemeProvider nonce={document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content} attribute="class" defaultTheme="system" enableSystem>{location.pathname.startsWith('/operacao/')?<ChatOperacao telaInicial={location.pathname.split('/')[2]||'chat'}/>:<ChatConsulta telaInicial={location.pathname==='/consulta/contatos'?'contatos':'chat'}/>}</ThemeProvider></React.StrictMode>);

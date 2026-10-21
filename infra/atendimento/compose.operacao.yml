@@ -1,0 +1,50 @@
+name: grazing-donatella-operacao-v2
+services:
+  operacao:
+    image: grazing-donatella-consulta-v2:20261008-a
+    pull_policy: never
+    container_name: grazing-donatella-operacao-v2
+    command: [/release/operacao.mjs]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 384m
+    cpus: 1
+    pids_limit: 96
+    environment:
+      ATENDIMENTO_IA_HABILITADA: 'true'
+      ATENDIMENTO_ENVIO_HABILITADO: 'false'
+      ATENDIMENTO_AUTORIDADE_ENVIO: origem
+    volumes:
+      - ${ATENDIMENTO_RAIZ_REMOTA_OPERACAO:?raiz privada da operacao}/release:/release:ro
+      - ${ATENDIMENTO_RAIZ_REMOTA_OPERACAO:?raiz privada da operacao}/configuracao/operacao.json:/run/secrets/operacao.json:ro
+      - ${ATENDIMENTO_RAIZ_REMOTA_OPERACAO:?raiz privada da operacao}/midia:/midia:rw
+      - ${ATENDIMENTO_RAIZ_REMOTA_OPERACAO:?raiz privada da operacao}/midia-ensaio:/midia-ensaio:rw
+      - ${ATENDIMENTO_MIDIA_ORIGEM:?midia privada preservada}:/legado/midia:ro
+      - grazing-donatella-coletor-v2-estado:/legado/incrementais:ro
+      - grazing-donatella-checkpoints-operacao-v2-estado:/backup-estado:ro
+    tmpfs: ['/tmp:rw,noexec,nosuid,size=16m']
+    networks: [proxy, banco, saida]
+    healthcheck:
+      test: [CMD, node, -e, "require('node:http').get({hostname:'127.0.0.1',port:3000,path:'/operacao/saude',headers:{Host:'atendimento.grazinghub.com.br'}},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 4s
+      retries: 3
+    logging: {driver: json-file, options: {max-size: 5m, max-file: '2'}}
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: dokploy-network
+      traefik.http.routers.donatella-operacao-https.rule: Host(`atendimento.grazinghub.com.br`) && (Path(`/`) || Path(`/operacao`) || PathPrefix(`/operacao/`) || PathPrefix(`/api/atendimento/operacao/`) || Path(`/api/atendimento/webhook`) || Path(`/api/atendimento/woocommerce/webhook`))
+      traefik.http.routers.donatella-operacao-https.priority: '220'
+      traefik.http.routers.donatella-operacao-https.entrypoints: websecure
+      traefik.http.routers.donatella-operacao-https.tls.certresolver: letsencrypt
+      traefik.http.routers.donatella-operacao-https.service: donatella-operacao-v2
+      traefik.http.services.donatella-operacao-v2.loadbalancer.server.port: '3000'
+networks:
+  proxy: {external: true, name: dokploy-network}
+  banco: {external: true, name: grazing-donatella-operacao-v2-privada}
+  saida: {external: true, name: grazing-donatella-coletor-v2-saida}
+volumes:
+  grazing-donatella-coletor-v2-estado: {external: true}
+  grazing-donatella-checkpoints-operacao-v2-estado: {external: true}

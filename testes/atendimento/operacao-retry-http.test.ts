@@ -1,0 +1,23 @@
+import {describe,it,expect,vi} from 'vitest';
+import {Readable} from 'node:stream';
+import type {IncomingMessage,ServerResponse} from 'node:http';
+import {criarHandlerOperacao} from '../../scripts/atendimento/operacao-servidor';
+import type {RepositorioOperacaoPg,RepositorioEntradaPg} from '../../src/lib/atendimento/operacao-repositorio-pg';
+import type {IdentidadeOperacao} from '../../src/lib/atendimento/operacao-tipos';
+vi.mock('server-only',()=>({}));
+const origem='https://atendimento.exemplo.invalid',usuario:IdentidadeOperacao={id:'equipe-ficticia',nome:'Pessoa fictícia',perfilId:'fixture',sessaoVersao:1,permissoes:['consultar','mensagens.visualizar','mensagens.adicionar']};
+const pedido={conversaId:'11111111-1111-4111-a111-111111111111',mensagemId:'22222222-2222-4222-a222-222222222222',intencaoId:'33333333-3333-4333-a333-333333333333',versao:4,idempotencia:'44444444-4444-4444-a444-444444444444'};
+function req(path:string,metodo='POST',body:unknown=pedido,headers:Record<string,string>={}){return Object.assign(Readable.from(metodo==='GET'||metodo==='HEAD'?[]:[Buffer.from(JSON.stringify(body))]),{url:'/api/atendimento/operacao'+path,method:metodo,headers:{host:new URL(origem).host,origin:origem,'content-type':'application/json',...headers}}) as IncomingMessage;}
+function res(){const r={statusCode:0,bytes:'',setHeader:vi.fn(),writeHead(c:number){this.statusCode=c;},end(v?:string){this.bytes=v??'';}};return r as unknown as ServerResponse&{bytes:string};}
+function fixture(p:{sessao?:boolean;csrf?:boolean;permissao?:boolean}={}){
+ const repo={autorizar:vi.fn(async()=>p.permissao!==false),tentarNovamente:vi.fn(async()=>({id:pedido.idempotencia,mensagemId:pedido.mensagemId,estado:'pendente'})),estadoMensagem:vi.fn(async()=>({mensagemId:pedido.mensagemId,intencaoId:pedido.intencaoId,estado:'recusado',falhaCodigo:'META_CODIGO_131047',podeTentarNovamente:true}))} as unknown as RepositorioOperacaoPg;
+ const handler=criarHandlerOperacao({repo,entrada:{} as RepositorioEntradaPg,webhook:null,origem,somenteChatHumano:true,autenticar:async()=>p.sessao===false?null:usuario,conferirCsrf:async()=>p.csrf!==false,listarEquipe:async()=>({usuarios:[],equipes:[]})});return {repo,handler};
+}
+describe('nova tentativa manual no HTTP de Atendimento',()=>{
+ it('aceita a operação mínima com usuário autenticado e recibo da mesma mensagem',async()=>{const f=fixture(),r=res();await f.handler(req('/mensagens/tentar-novamente'),r);expect(r.statusCode).toBe(202);expect(f.repo.tentarNovamente).toHaveBeenCalledWith(usuario,pedido);expect(JSON.parse(r.bytes).mensagemId).toBe(pedido.mensagemId);});
+ it.each([{sessao:false},{csrf:false},{permissao:false}])('não toca a fila sem sessão, CSRF ou acesso: %j',async p=>{const f=fixture(p),r=res();await f.handler(req('/mensagens/tentar-novamente'),r);expect([401,403]).toContain(r.statusCode);expect(f.repo.tentarNovamente).not.toHaveBeenCalled();});
+ it.each([{texto:'texto diferente'},{telefone:'5511000000000'},{autor:'ia'},{assinaturaHumana:'Outro operador'},{anexoId:pedido.mensagemId},{modeloId:'outro'}])('recusa alterações do conteúdo, destino ou autoria: %j',async extra=>{const f=fixture(),r=res();await f.handler(req('/mensagens/tentar-novamente','POST',{...pedido,...extra}),r);expect(r.statusCode).toBe(400);expect(f.repo.tentarNovamente).not.toHaveBeenCalled();});
+ it.each(['OPERACAO_TENTATIVA_CONFLITO','OPERACAO_MODELO_ALTERADO','OPERACAO_CONTEXTO_ALTERADO'])('retorna conflito explícito, sem simular incerteza: %s',async codigo=>{const f=fixture(),r=res();vi.mocked(f.repo.tentarNovamente).mockRejectedValueOnce(Error(codigo));await f.handler(req('/mensagens/tentar-novamente'),r);expect(r.statusCode).toBe(409);expect(JSON.parse(r.bytes).erro).toBe(codigo);});
+ it('informa recusa conhecida quando o template não está aprovado',async()=>{const f=fixture(),r=res();vi.mocked(f.repo.tentarNovamente).mockRejectedValueOnce(Error('OPERACAO_MODELO_NAO_APROVADO'));await f.handler(req('/mensagens/tentar-novamente'),r);expect(r.statusCode).toBe(400);expect(JSON.parse(r.bytes).erro).toBe('OPERACAO_MODELO_NAO_APROVADO');});
+ it('consulta o estado de uma mensagem fora da página, sem expor conteúdo',async()=>{const f=fixture(),r=res();await f.handler(req('/mensagens/estado?conversaId='+pedido.conversaId+'&mensagemId='+pedido.mensagemId,'GET'),r);expect(r.statusCode).toBe(200);expect(f.repo.estadoMensagem).toHaveBeenCalledWith(usuario,{conversaId:pedido.conversaId,mensagemId:pedido.mensagemId});expect(JSON.parse(r.bytes)).toEqual({mensagemId:pedido.mensagemId,intencaoId:pedido.intencaoId,estado:'recusado',falhaCodigo:'META_CODIGO_131047',podeTentarNovamente:true});expect(r.bytes).not.toContain('conteudo');});
+});

@@ -1,0 +1,8 @@
+# Reutiliza bibliotecas já verificadas da imagem local, em uma nova imagem isolada.
+ARG BASE=sha256:d377f5445beccc03ee3f090cd250013232d6ba3ed90014ca94001d8ccf26e259
+FROM ${BASE}
+USER root
+RUN ln -s /app/node_modules /node_modules
+WORKDIR /release
+ENV NODE_ENV=production
+ENTRYPOINT ["node"]

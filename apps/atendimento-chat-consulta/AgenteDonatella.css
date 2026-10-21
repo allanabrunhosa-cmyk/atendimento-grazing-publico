@@ -1,0 +1,14 @@
+.agente-painel,.agente-custos,.agente-teste,.agente-horario{min-width:0}
+.agente-estado{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.agente-estado>div{display:grid;gap:4px;min-width:0}.agente-estado strong{font-size:1.2rem}.agente-estado>div>span{color:var(--muted-foreground);font-size:.85rem}
+.agente-controle{display:grid;gap:12px;padding-top:16px;border-top:1px solid var(--border)}
+.agente-conferencia{display:grid;gap:12px;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}.agente-conferencia h3,.agente-conferencia p,.agente-humano{margin:0}.agente-conferencia .toolbar{flex-wrap:wrap}
+.agente-controle h3,.agente-controle p,.agente-pendencias ul{margin:0}.agente-controle>.btn,.agente-teste>.btn{justify-self:start}
+.agente-pendencias{padding:12px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--foreground);line-height:1.6;overflow-wrap:anywhere}
+ul.agente-pendencias{padding-left:32px}.agente-pendencias ul{padding-left:20px}
+.agente-dados{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:0}.agente-dados>div{display:grid;align-content:start;gap:6px;min-width:0}
+.agente-dados dt{font-size:.85rem;color:var(--muted-foreground)}.agente-dados dd{margin:0;font-weight:600;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.agente-resultado p{white-space:pre-wrap;overflow-wrap:anywhere}.agente-resultado small{overflow-wrap:anywhere}.agente-erro{color:var(--danger);overflow-wrap:anywhere}
+.agente-confirmacao{background:var(--card);color:var(--foreground)}.agente-confirmacao p{line-height:1.6}.agente-confirmacao>.toolbar{justify-content:flex-end;flex-wrap:wrap}.agente-confirmacao .btn{white-space:normal}
+.agente-confirmacao .agente-confirmacao-cabecalho{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px}.agente-confirmacao-cabecalho [data-slot=dialog-title]{margin:0}.agente-confirmacao-cabecalho .close-icon{flex:none}
+@media(max-width:600px){.agente-dados{grid-template-columns:1fr}.agente-confirmacao>.toolbar>.btn{flex:1 1 160px}}

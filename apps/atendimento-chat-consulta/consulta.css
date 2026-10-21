@@ -1,0 +1,24 @@
+.consulta-chat .nav-item{width:100%;border:0;text-align:left;cursor:pointer;font-family:inherit}
+.consulta-chat .nav-item:not(.ativo):not(:hover){background:transparent}
+.consulta-chat .page-heading{margin-top:16px;min-height:64px}
+.consulta-chat .sincronizacao-consulta{display:grid;gap:8px;padding:16px;margin-bottom:12px;font-size:.87rem;line-height:1.5}
+.consulta-chat .sincronizacao-consulta.atencao{border-left:4px solid var(--primary)}
+.consulta-chat .consulta-bloqueada{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:.82rem;line-height:1.5}
+.consulta-chat .cliente-panel{margin-top:0;position:sticky;top:16px;max-height:calc(100dvh - 32px);overflow:auto}
+.consulta-chat .detail-section{display:grid;gap:12px;line-height:1.5;font-size:.9rem}
+.consulta-chat .mensagens>.balao>.btn{margin-top:10px;font-size:.8rem}
+.consulta-chat .balao span{white-space:normal;overflow-wrap:anywhere}
+.consulta-chat .rodape-demo{padding-bottom:16px}
+.consulta-entrada{max-width:580px;margin:8vh auto;padding:28px;display:grid;gap:20px;color:var(--foreground)}
+.consulta-entrada .logo-mark{width:48px;height:48px}
+.consulta-chat :is(.chat,.lista-conversas){max-height:800px}
+@media(min-width:1451px){.consulta-chat .ferramentas-topo{position:static}.consulta-chat .cliente-panel{right:auto;bottom:auto;width:auto}}
+@media(max-width:1100px){.consulta-chat .cliente-panel{position:fixed;right:20px;top:90px;bottom:20px;width:350px;max-height:none;z-index:40}}
+@media(max-width:700px){.consulta-chat .cliente-panel{top:72px;right:8px;left:8px;bottom:8px;width:auto}.consulta-chat .page-heading{margin-bottom:16px}.consulta-chat .sincronizacao-consulta{font-size:.8rem;padding:12px}.consulta-entrada{margin:24px 8px}}
+[data-slot=campo-busca]{display:flex;align-items:center;gap:8px;position:relative;min-width:0}
+[data-slot=campo-busca]:focus-within{outline:2px solid var(--primary);outline-offset:2px}
+[data-slot=campo-busca]>svg{flex:none;color:var(--primary)}
+[data-slot=campo-busca] input{flex:1;min-width:0;width:100%;border:0;background:transparent;outline:none;color:var(--foreground);font:inherit}
+[data-slot=campo-busca] .campo-busca-limpar{display:grid;place-items:center;flex:none;width:26px;height:26px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--muted);cursor:pointer}
+[data-slot=campo-busca] .campo-busca-limpar:hover{background:var(--surface);color:var(--foreground)}
+[data-slot=campo-busca] .campo-busca-limpar:focus-visible{outline:2px solid var(--primary);outline-offset:2px}

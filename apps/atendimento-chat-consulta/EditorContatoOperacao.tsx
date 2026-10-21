@@ -1,0 +1,24 @@
+import {useRef,useState} from 'react';
+import {Dialog,DialogClose,DialogContent,DialogDescription,DialogTitle} from '../../src/components/ui/dialog';
+import {Button} from '../../src/components/ui/button';
+import {Escolha} from './operacao-ui';
+import {limparTextoOperacao,mensagemErroOperacao,type ClienteOperacao,type ContatoOperacao} from './operacao-api';
+
+export function TagContato({classificacao}:{classificacao?:'cliente'|'lead'}){return <span className="chip classificacao-contato" data-classificacao={classificacao==='cliente'?'cliente':'lead'}>{classificacao==='cliente'?'Cliente':'Lead'}</span>;}
+export default function EditorContatoOperacao({contato,cliente,fechar,salvo,permissoes=[]}:{permissoes?:readonly string[];contato:ContatoOperacao;cliente:ClienteOperacao;fechar:()=>void;salvo:(c:ContatoOperacao)=>void}){
+ const podeEditar=permissoes.includes('contatos.visualizar')&&permissoes.includes('contatos.editar'),editarEtiquetas=permissoes.includes('etiquetas.visualizar')&&permissoes.includes('etiquetas.editar'),editarNotas=permissoes.includes('notas.visualizar')&&permissoes.includes('notas.adicionar');
+ const inicial={nome:contato.nome,email:contato.email??'',descricao:contato.descricao??'',classificacao:contato.classificacao??'lead',etiquetas:contato.tags.join(', '),notas:contato.notas??''};
+ const [dados,setDados]=useState(inicial),[ocupado,setOcupado]=useState(false),[erro,setErro]=useState(''),[incerto,setIncerto]=useState(false);const chave=useRef<string|null>(null),emCurso=useRef(false);
+ const alterar=(campo:keyof typeof dados,valor:string)=>{chave.current=null;setDados(d=>({...d,[campo]:valor}));};
+ const tags=[...new Set(dados.etiquetas.split(',').map(t=>t.trim()).filter(Boolean))],alterado=JSON.stringify(dados)!==JSON.stringify(inicial);
+ async function salvar(){if(!podeEditar||emCurso.current||incerto)return;emCurso.current=true;setOcupado(true);setErro('');chave.current??=crypto.randomUUID();try{const c=await cliente.editarContato({id:contato.id,nome:dados.nome,email:dados.email,descricao:dados.descricao,classificacao:dados.classificacao,tags,notas:dados.notas,versao:contato.versao??1,idempotencia:chave.current});salvo(c);fechar();}catch(e){setErro(mensagemErroOperacao(e));if(e instanceof Error&&'codigo' in e&&e.codigo==='RESULTADO_INCERTO')setIncerto(true);}finally{emCurso.current=false;setOcupado(false);}}
+ return <Dialog open alterado={alterado} onOpenChange={v=>{if(!v&&!ocupado)fechar();}}><DialogContent className="modal" showCloseButton={false}><DialogTitle>Editar contato</DialogTitle><DialogDescription>Atualize as informações e clique em Salvar contato.</DialogDescription><div className="form-grid">
+  <label>Nome<input className="field" maxLength={200} value={dados.nome} disabled={!podeEditar||ocupado||incerto} onChange={e=>alterar('nome',limparTextoOperacao(e.target.value,200).replace(/[\r\n\t]/g,''))}/></label>
+  <label>Telefone<input className="field" value={contato.telefone??''} readOnly aria-readonly="true"/></label>
+  <label>E-mail<input className="field" type="email" maxLength={254} value={dados.email} disabled={!podeEditar||ocupado||incerto} onChange={e=>alterar('email',limparTextoOperacao(e.target.value,254).replace(/\s/g,''))}/></label>
+  <label>Classificação<Escolha disabled={!podeEditar||ocupado||incerto||!!contato.hubClienteId} label="Classificação do contato" value={dados.classificacao} options={[{valor:'lead',rotulo:'Lead'},{valor:'cliente',rotulo:'Cliente'}]} onChange={v=>{if(!ocupado&&!incerto&&!contato.hubClienteId)alterar('classificacao',v);}}/></label>
+ </div><label>Descrição breve<input className="field" maxLength={200} value={dados.descricao} disabled={!podeEditar||ocupado||incerto} placeholder="Empresa, cargo ou contexto do contato" onChange={e=>alterar('descricao',limparTextoOperacao(e.target.value,200).replace(/[\r\n\t]/g,''))}/></label>
+ <label>Etiquetas<input className="field" maxLength={1858} value={dados.etiquetas} disabled={!podeEditar||ocupado||incerto||!editarEtiquetas} onChange={e=>alterar('etiquetas',limparTextoOperacao(e.target.value,1858))}/><small>Separe por vírgula. Até 30 etiquetas, com 60 caracteres cada.</small></label>
+ <label>Notas do contato<textarea className="field" maxLength={8000} value={dados.notas} disabled={!podeEditar||ocupado||incerto||!editarNotas} onChange={e=>alterar('notas',limparTextoOperacao(e.target.value,8000))}/></label>
+ {erro&&<p role="alert">{erro}</p>}<div className="toolbar"><DialogClose data-acao="cancelar" className="btn" disabled={ocupado}>Cancelar</DialogClose><Button className="btn acao-confirmar" variant="entrada" disabled={!podeEditar||ocupado||incerto||!alterado||!dados.nome.trim()||tags.length>30||tags.some(t=>t.length>60)} onClick={()=>void salvar()}>{ocupado?'Salvando…':'Salvar contato'}</Button></div></DialogContent></Dialog>;
+}

@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {Pool} from 'pg';
+import {RepositorioOperacaoPg,materializarEventoOperacao} from '../../src/lib/atendimento/operacao-repositorio-pg';
+import type {AcaoOperacao,IdentidadeOperacao} from '../../src/lib/atendimento/operacao-tipos';
+import {pngFicticio} from './fixtures-midia';
+const endereco=process.env.OPERACAO_BANCO_TESTE??'',url=new URL(endereco);
+if(url.protocol!=='postgresql:'||url.pathname!=='/donatella_ensaio_operacao'||!['127.0.0.1','localhost'].includes(url.hostname))throw Error('ENSAIO_ISOLADO_EXIGIDO');
+const pool=new Pool({connectionString:endereco,max:4}),numeroId='123456789';
+const direitos=new Set<AcaoOperacao>(['consultar','atender','mensagens.visualizar','mensagens.adicionar','contatos.visualizar','notas.visualizar','notas.adicionar','etiquetas.visualizar']);
+const ana:IdentidadeOperacao={id:'fixture-ana-historico',nome:'Ana Fictícia',perfilId:'fixture',sessaoVersao:1,permissoes:[]};
+const bia={...ana,id:'fixture-bia-historico',nome:'Bia Fictícia'};
+let assercoes=0,fetchs=0;
+globalThis.fetch=async()=>{fetchs++;throw Error('ENVIO_EXTERNO_PROIBIDO');};
+const repo=new RepositorioOperacaoPg(pool,async(i,a)=>[ana.id,bia.id].includes(i.id)&&direitos.has(a),()=> 'operacao','/tmp/midia-historico-ficticia',undefined,undefined,'humano',{numeroId,ficticio:true});
+const conferir=(ok:unknown)=>{assert.ok(ok);assercoes++;};
+const recusar=async(f:()=>Promise<unknown>,e:string)=>{await assert.rejects(f,new RegExp(e));assercoes++;};
+const ler=async(id:string)=>(await pool.query('SELECT * FROM atendimento_operacao.conversa WHERE id=$1',[id])).rows[0];
+const receber=(telefone:string,id='wamid.fixture-historico-'+randomUUID(),citada?:string)=>materializarEventoOperacao(repo,{chave:randomUUID(),tipo:'mensagem',waba:'fixture',numero:numeroId,conteudo:{item:{id,from:telefone,timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body:'Mensagem fictícia preservada'},...(citada?{context:{id:citada}}:{})}}});
+const agir=async(id:string,acao:string,ator=ana)=>repo.agir(ator,id,{acao,versao:Number((await ler(id)).versao),idempotencia:randomUUID()});
+try {
+ const execucao=randomUUID(),wamidOriginal='wamid.fixture-original-'+execucao,wamidReabertura='wamid.fixture-reabertura-'+execucao;
+ const sequencia=Number((await pool.query('SELECT count(*)::int n FROM atendimento_operacao.contato')).rows[0].n)+31;
+ const c=await repo.criarContato(ana,{nome:'Contato fictício do histórico',telefone:'+551190000'+String(sequencia).padStart(4,'0'),idempotencia:randomUUID()});
+ const primeiro=await repo.iniciarConversaContato(ana,{contatoId:String(c.contato.id),versaoContato:c.contato.versao,idempotencia:randomUUID()});
+ const antiga=String(primeiro.conversa.id),telefone=String(c.contato.telefone);
+ // O webhook usa o banco fictício; não há cliente, rede ou envio externo.
+ const entrada=await receber(telefone,wamidOriginal);
+ if(!('mensagemId' in entrada)||typeof entrada.mensagemId!=='string')throw Error('ENTRADA_FICTICIA_AUSENTE');
+ conferir(entrada.conversaId===antiga);
+ const falha=await repo.enfileirar(ana,{conversaId:antiga,versao:Number((await ler(antiga)).versao),idempotencia:randomUUID(),tipo:'text',texto:'Resposta fictícia não enviada'});
+ await pool.query("UPDATE atendimento_operacao.mensagem SET estado='recusado' WHERE id=$1",[falha.mensagemId]);await pool.query("UPDATE atendimento_operacao.intencao SET estado='recusado' WHERE id=$1",[falha.id]);
+ const anexo=await repo.salvarAnexo(ana,{conversaId:antiga,idempotencia:randomUUID(),nome:'imagem-ficticia.png',mime:'image/png',base64:pngFicticio.toString('base64')});
+ const imagem=await repo.enfileirar(ana,{conversaId:antiga,versao:Number((await ler(antiga)).versao),idempotencia:randomUUID(),tipo:'image',anexoId:anexo.id,texto:'Imagem antiga fictícia'});
+ await repo.agir(ana,antiga,{acao:'nota',texto:'Nota antiga preservada',versao:Number((await ler(antiga)).versao),idempotencia:randomUUID()});
+ const fechamento={acao:'encerrar',versao:Number((await ler(antiga)).versao),idempotencia:randomUUID()};
+ await repo.agir(ana,antiga,fechamento);await repo.agir(ana,antiga,fechamento);
+ conferir((await pool.query("SELECT count(*)::int n FROM atendimento_operacao.auditoria WHERE entidade_id=$1 AND acao='encerrar'",[antiga])).rows[0].n===1);
+ await recusar(()=>agir(antiga,'encerrar'),'CONTEXTO_ALTERADO');
+ conferir((await repo.historico(ana,{conversaId:antiga})).registros.some(m=>'evento' in m&&m.evento==='encerramento'&&m.autorNome===ana.nome));
+ const novaEntrada=await receber(telefone,wamidReabertura);
+ if(!('conversaId' in novaEntrada))throw Error('ENTRADA_FICTICIA_AUSENTE');
+ const nova=String(novaEntrada.conversaId);conferir(nova===antiga);
+ // Sessões antigas ainda existem na base. A fixture conserva esse caso sem
+ // depender da antiga criação de outro ID a cada reabertura.
+ const sessaoAnterior=randomUUID(),falhaAnterior=randomUUID(),imagemAnterior=randomUUID(),anexoAnterior=randomUUID(),clienteAnterior=randomUUID(),wamidAnterior='wamid.fixture-anterior-'+execucao;
+ await pool.query("INSERT INTO atendimento_operacao.conversa(id,contato_id,estado,ficticia,criada_em,ultima_mensagem_em) VALUES($1,$2,'encerrada',true,'2025-01-01T12:00:00Z','2025-01-01T12:00:00Z')",[sessaoAnterior,c.contato.id]);
+ await pool.query('INSERT INTO atendimento_operacao.anexo(id,conversa_id,hash,nome,mime,tamanho,autor_id) SELECT $1,$2,hash,nome,mime,tamanho,autor_id FROM atendimento_operacao.anexo WHERE id=$3',[anexoAnterior,sessaoAnterior,anexo.id]);
+ await pool.query("INSERT INTO atendimento_operacao.mensagem(id,conversa_id,autor,conteudo,tipo,estado,criada_em) VALUES($1,$2,'humano','Falha histórica fictícia','text','recusado','2026-01-01T11:00:00Z')",[falhaAnterior,sessaoAnterior]);
+ await pool.query("INSERT INTO atendimento_operacao.mensagem(id,conversa_id,autor,conteudo,tipo,anexo_id,criada_em) VALUES($1,$2,'humano','Imagem anterior fictícia','image',$3,'2026-01-01T11:00:01Z')",[imagemAnterior,sessaoAnterior,anexoAnterior]);
+ await pool.query("INSERT INTO atendimento_operacao.mensagem(id,conversa_id,autor,conteudo,tipo,wamid,criada_em) VALUES($1,$2,'cliente','Mensagem fictícia preservada','text',$3,'2026-01-01T11:00:02Z')",[clienteAnterior,sessaoAnterior,wamidAnterior]);
+ await receber(telefone,wamidReabertura);
+ const h=await repo.historico(ana,{conversaId:nova});
+ conferir(h.registros.some(m=>m.id===entrada.mensagemId));
+ conferir(h.registros.some(m=>m.id===imagem.mensagemId&&m.anexoId===anexo.id&&m.conteudo==='Imagem antiga fictícia'));
+ conferir(h.registros.some(m=>m.id===falha.mensagemId&&m.podeTentarNovamente&&!m.podeResponder));
+ conferir(h.registros.some(m=>m.id===falhaAnterior&&!m.podeTentarNovamente&&!m.podeResponder));
+ conferir(h.registros.some(m=>m.id===imagemAnterior&&m.anexoId===anexoAnterior));
+ conferir(h.registros.filter(m=>'evento' in m&&m.evento==='reabertura'&&m.autorNome==='Sistema — WhatsApp').length===1);
+ conferir((await ler(antiga)).estado==='humano');
+ conferir((await pool.query('SELECT texto FROM atendimento_operacao.nota WHERE conversa_id=$1',[antiga])).rows[0].texto==='Nota antiga preservada');
+ await recusar(async()=>repo.tentarNovamente(ana,{conversaId:nova,mensagemId:falhaAnterior,intencaoId:falha.id,idempotencia:randomUUID(),versao:Number((await ler(nova)).versao)}),'MENSAGEM_AUSENTE');
+ const resposta=await receber(telefone,undefined,wamidAnterior);
+ if(!('mensagemId' in resposta))throw Error('RESPOSTA_FICTICIA_AUSENTE');
+ conferir((await repo.historico(ana,{conversaId:nova})).registros.some(m=>m.id===resposta.mensagemId&&m.citada?.conteudo==='Mensagem fictícia preservada'));
+ await recusar(()=>agir(nova,'reabrir'),'CONTEXTO_ALTERADO');
+ await agir(nova,'encerrar',bia);
+ const manual=await repo.iniciarConversaContato(bia,{contatoId:String(c.contato.id),versaoContato:c.contato.versao,idempotencia:randomUUID()});
+ const atual=String(manual.conversa.id);conferir(atual===nova&&manual.reutilizada);
+ conferir((await repo.historico(ana,{conversaId:atual})).registros.some(m=>'evento' in m&&m.evento==='reabertura'&&m.autorNome===bia.nome));
+ await agir(atual,'encerrar',bia);await agir(atual,'reabrir',ana);
+ conferir((await repo.historico(ana,{conversaId:atual})).registros.some(m=>'evento' in m&&m.evento==='reabertura'&&m.conversaId===atual&&m.autorNome===ana.nome));
+ // Mesmo telefone em outro contato ou ambiente não é evidência de identidade.
+ const outro=randomUUID(),estrangeira=randomUUID(),protegida=randomUUID();
+ await pool.query("INSERT INTO atendimento_operacao.contato(id,nome,telefone) VALUES($1,'Outro contato fictício',$2)",[outro,telefone]);
+ await pool.query("INSERT INTO atendimento_operacao.conversa(id,contato_id,estado,ficticia) VALUES($1,$2,'encerrada',true),($3,$4,'encerrada',false)",[estrangeira,outro,protegida,c.contato.id]);
+ for(const conversaId of [estrangeira,protegida])await pool.query("INSERT INTO atendimento_operacao.mensagem(id,conversa_id,autor,conteudo,tipo) VALUES($1,$2,'cliente','NÃO EXPOR OUTRO ESCOPO','text')",[randomUUID(),conversaId]);
+ conferir(!(await repo.historico(ana,{conversaId:atual})).registros.some(m=>m.conteudo==='NÃO EXPOR OUTRO ESCOPO'));
+ direitos.delete('mensagens.visualizar');conferir((await repo.historico(ana,{conversaId:atual})).registros.length===0);direitos.add('mensagens.visualizar');
+ direitos.delete('consultar');await recusar(()=>repo.historico(ana,{conversaId:atual}),'ACESSO_NEGADO');direitos.add('consultar');
+ // Mais de mil linhas, com microssegundos iguais e fronteiras entre sessões.
+ await pool.query("INSERT INTO atendimento_operacao.mensagem(id,conversa_id,autor,conteudo,tipo,criada_em) SELECT md5($2||n)::uuid,$1,'cliente','Página fictícia '||n,'text','2026-01-01T12:00:00Z'::timestamptz+(n%3)*interval '1 microsecond' FROM generate_series(1,1105) n",[sessaoAnterior,execucao]);
+ let cursor:null|{antes:string;id:string}=null;const ids=new Set<string>(),linhas:{id:string;criadaEm:string}[]=[];let paginas=0;
+ do {const p=await repo.historico(ana,{conversaId:atual,...(cursor?{antes:cursor.antes,id:cursor.id}:{})});conferir(p.registros.length<=50);for(const m of p.registros){conferir(!ids.has(m.id));ids.add(m.id);}linhas.unshift(...p.registros);cursor=p.proxima;paginas++;if(paginas>50)throw Error('PAGINACAO_NAO_TERMINOU');}while(cursor);
+ const esperadas=(await pool.query('SELECT count(*)::int n FROM atendimento_operacao.mensagem m JOIN atendimento_operacao.conversa v ON v.id=m.conversa_id WHERE v.contato_id=$1 AND v.ficticia',[c.contato.id])).rows[0].n;
+ conferir(linhas.length===esperadas+7); // Três encerramentos, três reaberturas e o início posterior ao legado.
+ conferir(ids.has(imagem.mensagemId)&&ids.has(entrada.mensagemId)&&ids.has(imagemAnterior)&&ids.has(clienteAnterior));
+ conferir(linhas.every((m,n)=>n===0||linhas[n-1].criadaEm.localeCompare(m.criadaEm)<0||linhas[n-1].criadaEm===m.criadaEm&&linhas[n-1].id.localeCompare(m.id)<0));
+ conferir(paginas>20);conferir(fetchs===0);
+ // Um início legado não recebe autoria inventada e não desaparece ao reabrir.
+ const contatoLegado=randomUUID(),legadaA=randomUUID(),legadaB=randomUUID(),fechadaLegada=randomUUID();
+ await pool.query("INSERT INTO atendimento_operacao.contato(id,nome,telefone) VALUES($1,'Legado fictício','5511000000077')",[contatoLegado]);
+ await pool.query("INSERT INTO atendimento_operacao.conversa(id,contato_id,estado,ficticia,criada_em) VALUES($1,$3,'encerrada',true,'2026-02-01T12:00:00Z'),($2,$3,'encerrada',true,'2026-02-02T12:00:00Z')",[legadaA,legadaB,contatoLegado]);
+ await pool.query("INSERT INTO atendimento_operacao.auditoria(id,autor_id,entidade_id,acao,versao,criada_em) VALUES($1,'autor-legado-sem-nome',$2,'encerrar',2,'2026-02-01T13:00:00Z')",[fechadaLegada,legadaA]);
+ const legado=await repo.historico(ana,{conversaId:legadaB});
+ conferir(legado.registros.some(m=>m.id===fechadaLegada&&m.autorNome===null));
+ conferir(legado.registros.some(m=>m.id===legadaB&&'evento' in m&&m.evento==='inicio'&&m.autorNome===null&&m.criadaEm==='2026-02-02T12:00:00.000000Z'));
+ await agir(legadaB,'reabrir',ana);
+ conferir((await repo.historico(ana,{conversaId:legadaB})).registros.some(m=>m.id===legadaB&&'evento' in m&&m.evento==='inicio'));
+ console.log(JSON.stringify({ensaio:'historico-completo',assercoes,paginas,linhas:linhas.length,enviosExternos:fetchs}));
+} finally {await pool.end();}

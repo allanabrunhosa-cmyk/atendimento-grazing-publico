@@ -1,0 +1,15 @@
+[Unit]
+Description=Donatella V2 - novo ponto de banco arquivos e configuracoes no R2
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+TimeoutStartSec=90min
+# Caminhos e ambiente são definidos em drop-in privado antes da instalação.
+ExecStart=/bin/sh -c 'exec "$${ATENDIMENTO_ROTINA_CHECKPOINT_R2:?ATENDIMENTO_ROTINA_CHECKPOINT_R2_OBRIGATORIA}"'
+StandardOutput=journal
+StandardError=journal
+# Falha e retomada conservam a intencao/partes, sem apagar eventos ou backups.

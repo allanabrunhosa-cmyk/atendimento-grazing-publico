@@ -1,0 +1,40 @@
+name: grazing-donatella-preview-v2
+services:
+  preview:
+    image: ${DONATELLA_PREVIEW_IMAGEM:?Informe a imagem isolada validada}
+    container_name: grazing-donatella-preview-v2
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    volumes:
+      - ${DONATELLA_PREVIEW_RELEASE:?Informe a release isolada}:/preview:ro
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=8m"]
+    networks: [proxy]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://localhost:3000/preview/saude').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    logging: {driver: json-file, options: {max-size: 5m, max-file: "2"}}
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.donatella-preview-http.rule=Host(`atendimento.grazinghub.com.br`) && (Path(`/preview`) || PathPrefix(`/preview/`))
+      - traefik.http.routers.donatella-preview-http.entrypoints=web
+      - traefik.http.routers.donatella-preview-http.middlewares=redirect-to-https@file
+      - traefik.http.routers.donatella-preview-http.service=donatella-preview-v2
+      - traefik.http.routers.donatella-preview-http.priority=100
+      - traefik.http.routers.donatella-preview-https.rule=Host(`atendimento.grazinghub.com.br`) && (Path(`/preview`) || PathPrefix(`/preview/`))
+      - traefik.http.routers.donatella-preview-https.entrypoints=websecure
+      - traefik.http.routers.donatella-preview-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.donatella-preview-https.service=donatella-preview-v2
+      - traefik.http.routers.donatella-preview-https.priority=100
+      - traefik.http.services.donatella-preview-v2.loadbalancer.server.port=3000
+networks:
+  proxy:
+    external: true
+    name: dokploy-network

@@ -1,0 +1,43 @@
+name: grazing-donatella-laboratorio-v2
+services:
+  laboratorio:
+    image: ${DONATELLA_LAB_IMAGEM:?Informe a imagem isolada validada}
+    container_name: grazing-donatella-laboratorio-v2
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    volumes:
+      - ${DONATELLA_LAB_RELEASE:?Informe a release isolada}:/laboratorio:ro
+      # Diretório novo e exclusivo, propriedade uid/gid 1000 antes de iniciar.
+      # Não montar réplica, mídia, cofre, credenciais, R2 ou serviços HUB.
+      - ${DONATELLA_LAB_ESTADO:?Informe o diretório exclusivo de dados fictícios}:/estado:rw
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=8m"]
+    networks: [proxy]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://localhost:3000/laboratorio/saude').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    logging: {driver: json-file, options: {max-size: 5m, max-file: "2"}}
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.donatella-laboratorio-http.rule=Host(`atendimento.grazinghub.com.br`) && (Path(`/laboratorio`) || PathPrefix(`/laboratorio/`))
+      - traefik.http.routers.donatella-laboratorio-http.entrypoints=web
+      - traefik.http.routers.donatella-laboratorio-http.middlewares=redirect-to-https@file
+      - traefik.http.routers.donatella-laboratorio-http.service=donatella-laboratorio-v2
+      - traefik.http.routers.donatella-laboratorio-http.priority=100
+      - traefik.http.routers.donatella-laboratorio-https.rule=Host(`atendimento.grazinghub.com.br`) && (Path(`/laboratorio`) || PathPrefix(`/laboratorio/`))
+      - traefik.http.routers.donatella-laboratorio-https.entrypoints=websecure
+      - traefik.http.routers.donatella-laboratorio-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.donatella-laboratorio-https.service=donatella-laboratorio-v2
+      - traefik.http.routers.donatella-laboratorio-https.priority=100
+      - traefik.http.services.donatella-laboratorio-v2.loadbalancer.server.port=3000
+networks:
+  proxy:
+    external: true
+    name: dokploy-network

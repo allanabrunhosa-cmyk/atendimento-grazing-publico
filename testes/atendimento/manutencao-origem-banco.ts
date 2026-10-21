@@ -1,0 +1,64 @@
+import {Pool} from 'pg';
+import {randomUUID} from 'node:crypto';
+import {ALVOS} from '../../scripts/atendimento/sincronizacao';
+import {sqlPreflightManutencao,sqlPreflightCronManutencao,prepararManutencaoOrigem,validarObservacaoManutencao,type PreflightManutencao} from '../../scripts/atendimento/manutencao-origem';
+import {criarMaterializador} from '../../src/lib/atendimento/materializacao';
+import {prepararCarga,decodificarCarga,type CargaPreparada,type DocumentoCarga} from '../../src/lib/atendimento/carga';
+const url=new URL(process.env.DATABASE_URL??'');
+if(process.argv[2]!=='--ensaio'||url.hostname!=='grazing-donatella-operacao-v2-banco'||url.pathname!=='/donatella_ensaio_manutencao')throw Error('MANUTENCAO_ENSAIO_BANCO_RECUSADO');
+const pool=new Pool({connectionString:url.toString(),max:1}),tx=await pool.connect();let asserts=0;
+const destino=new Pool({connectionString:url.toString(),max:1});
+const conferir=(ok:unknown,codigo:string)=>{if(!ok)throw Error(codigo);asserts++;};
+async function recusa(sql:string){try{await tx.query(sql);throw Error('MANUTENCAO_ENSAIO_ESCRITA_PERMITIDA');}catch(e){if((e as {code?:string}).code!=='55000')throw e;asserts++;}}
+try{
+ const banco=await tx.query('SELECT current_database() banco');conferir(banco.rows[0].banco==='donatella_ensaio_manutencao','MANUTENCAO_ENSAIO_BANCO_RECUSADO');
+ if((await tx.query("SELECT to_regclass('public.nina_settings') objeto")).rows[0].objeto||(await tx.query("SELECT count(*)::int quantidade FROM pg_namespace WHERE nspname IN ('auth','storage','cron','atendimento_migracao','donatella_public','donatella_auth','donatella_storage','donatella_corte_privado')")).rows[0].quantidade!==0)throw Error('MANUTENCAO_ENSAIO_EXISTENTE_PRESERVADO');
+ await tx.query("CREATE SCHEMA auth; CREATE SCHEMA storage; CREATE SCHEMA cron; DO $$BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN; END IF; END$$;");
+ for(const a of ALVOS){let cols=a==='public.contact_cooldowns'?'contact_phone text,rule_id uuid,PRIMARY KEY(contact_phone,rule_id)':'id uuid PRIMARY KEY';if(a==='public.nina_settings')cols+=',whatsapp_access_token text,is_active boolean,auto_response_enabled boolean';if(a==='public.automation_rules')cols+=',active boolean';if(a==='public.send_queue')cols+=',message_id uuid,status text,created_at timestamptz,updated_at timestamptz';if(a==='public.contacts')cols+=',valor numeric(22,6),alterado_em timestamptz';if(a==='public.appointments')cols+=',contact_id uuid';await tx.query(`CREATE TABLE ${a}(${cols})`);}
+ await tx.query("CREATE SCHEMA donatella_migracao; CREATE TABLE donatella_migracao.coletor(fingerprint text); INSERT INTO donatella_migracao.coletor VALUES(repeat('a',64)); CREATE FUNCTION donatella_migracao.coletor_autorizado() RETURNS boolean LANGUAGE sql AS $$SELECT coalesce(current_setting('ensaio.coletor',true)='1',false)$$; CREATE FUNCTION donatella_migracao.chave(dados jsonb,colunas text[]) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$SELECT jsonb_object_agg(c,dados->c) FROM unnest(colunas) c$$; CREATE FUNCTION donatella_migracao.projetar(esquema text,dados jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$SELECT dados$$;");
+ await tx.query("CREATE TABLE cron.job(jobid bigint PRIMARY KEY,database text,active boolean,command text,username text); INSERT INTO cron.job VALUES(1,current_database(),true,'SELECT 1',current_user),(2,current_database(),false,'SELECT 2',current_user); CREATE TABLE cron.alter_ensaio_log(jobid bigint,active boolean); CREATE FUNCTION cron.alter_job(job_id bigint,schedule text DEFAULT NULL,command text DEFAULT NULL,database text DEFAULT NULL,username text DEFAULT NULL,active boolean DEFAULT NULL) RETURNS void LANGUAGE plpgsql AS $$BEGIN IF $2 IS NOT NULL OR $3 IS NOT NULL OR $4 IS NOT NULL OR $5 IS NOT NULL THEN RAISE EXCEPTION 'ENSAIO_CRON_SOMENTE_ACTIVE'; END IF; UPDATE cron.job j SET active=coalesce($6,j.active) WHERE j.jobid=$1 AND j.username=current_user; IF NOT FOUND THEN RAISE EXCEPTION 'ENSAIO_CRON_PROPRIETARIO'; END IF; INSERT INTO cron.alter_ensaio_log VALUES($1,$6); END$$;");
+ const id=randomUUID(),em=new Date().toISOString();
+ await tx.query("INSERT INTO public.nina_settings VALUES($1,'credencial exclusivamente fictícia',true,true);",[id]);await tx.query('INSERT INTO public.automation_rules VALUES($1,true)',[id]);await tx.query("INSERT INTO public.send_queue VALUES($1,$1,'processing',$2,$2)",[id,em]);await tx.query("INSERT INTO public.contacts VALUES($1,9007199254740993.123456,'2026-10-10T01:02:03.123456Z')",[id]);await tx.query('INSERT INTO public.appointments VALUES($1,$1)',[id]);
+ const r1=await tx.query(sqlPreflightManutencao()),r2=await tx.query(sqlPreflightCronManutencao());
+ const resultado=(r:unknown,k:string)=>Array.isArray(r)?r.find((x:{rows?:Record<string,unknown>[]})=>x.rows?.[0]?.[k]):r;
+ const p={...(resultado(r1,'preflight') as {rows:{preflight:object}[]}).rows[0].preflight,...(resultado(r2,'cron') as {rows:{cron:object}[]}).rows[0].cron} as PreflightManutencao;
+ conferir(p.tabelas===37,'MANUTENCAO_ENSAIO_PREFLIGHT');
+ conferir(p.cronMecanismo==='alter_job'&&p.podeAlterarCron,'MANUTENCAO_ENSAIO_CRON_API');
+ const preparada=prepararManutencaoOrigem(p,randomUUID()),congelada=await tx.query(preparada.sql),observacao=(resultado(congelada,'manutencao') as {rows:{manutencao:Parameters<typeof validarObservacaoManutencao>[0]}[]}).rows[0].manutencao;
+ conferir(validarObservacaoManutencao(observacao).congelamentoBancoConferido,'MANUTENCAO_ENSAIO_CONFERENCIA');conferir(observacao.emissoresSuspensos===false,'MANUTENCAO_ENSAIO_EMISSOR_INVENTADO');conferir(observacao.enviosProcessingT0===1,'MANUTENCAO_ENSAIO_INCERTO');
+ try{await tx.query('SELECT public.donatella_migracao_copia_final($1,\'public\',\'contacts\')',[preparada.execucao]);throw Error('MANUTENCAO_ENSAIO_ACESSO_ABERTO');}catch(e){if((e as {code?:string}).code!=='42501')throw e;asserts++;}
+ await tx.query("SET ensaio.coletor='1'");const copia=await tx.query('SELECT public.donatella_migracao_copia_final($1,\'public\',\'contacts\') pagina',[preparada.execucao]);conferir(copia.rows[0].pagina.registros.length===1&&copia.rows[0].pagina.fim===true,'MANUTENCAO_ENSAIO_COPIA');
+ try{await tx.query('SELECT public.donatella_migracao_copia_final($1,\'public\',\'contacts\')',[randomUUID()]);throw Error('MANUTENCAO_ENSAIO_ESCOPO_ABERTO');}catch(e){if((e as {code?:string}).code!=='55000')throw e;asserts++;}
+ await recusa(`INSERT INTO public.contacts(id) VALUES('${randomUUID()}')`);await recusa(`UPDATE public.contacts SET id='${randomUUID()}'`);await recusa('DELETE FROM public.contacts');await recusa('TRUNCATE public.contacts');await recusa('UPDATE public.send_queue SET status=\'completed\'');
+ conferir((await tx.query('SELECT count(*)::int quantidade FROM public.contacts')).rows[0].quantidade===1,'MANUTENCAO_ENSAIO_LEITURA');conferir((await tx.query('SELECT active FROM cron.job WHERE jobid=1')).rows[0].active===false,'MANUTENCAO_ENSAIO_CRON');conferir((await tx.query('SELECT whatsapp_access_token FROM public.nina_settings')).rows[0].whatsapp_access_token===null,'MANUTENCAO_ENSAIO_TOKEN');
+ conferir((await tx.query('SELECT whatsapp_access_token FROM donatella_corte_privado.configuracoes')).rows[0].whatsapp_access_token==='credencial exclusivamente fictícia','MANUTENCAO_ENSAIO_CUSTODIA');
+ conferir((await tx.query('SELECT count(*)::int quantidade FROM cron.alter_ensaio_log')).rows[0].quantidade===1,'MANUTENCAO_ENSAIO_CRON_API_SUSPENSAO');
+ // Destino fictício em schemas separados. Testa o motor real, sem bancos do HUB,
+ // sem R2 ou chamadas externas e sem conceder autoridade ao receptor operacional.
+ process.env.ATENDIMENTO_CARGA_SECRET=Buffer.alloc(32,19).toString('base64');
+ await destino.query('CREATE SCHEMA atendimento_migracao; CREATE SCHEMA donatella_public; CREATE SCHEMA donatella_auth; CREATE SCHEMA donatella_storage; CREATE TABLE atendimento_migracao.carga_documento(execucao uuid,id uuid,tipo text,hash text,cifrado text,PRIMARY KEY(execucao,id)); CREATE TABLE atendimento_migracao.carga_registro(execucao uuid,schema_name text,table_name text,chave_hash text,sequencia bigint,excluido boolean,documento_id uuid,indice integer,PRIMARY KEY(execucao,schema_name,table_name,chave_hash)); CREATE TABLE atendimento_migracao.materializacao(execucao uuid,documento_id uuid,PRIMARY KEY(execucao,documento_id));');
+ const execucaoCopia=randomUUID(),catalogo:{esquema:string;tabela:string;colunas:{nome:string;tipo:string}[];pk:string[]}[]=[],cargas:CargaPreparada[]=[];
+ for(const alvo of ALVOS){
+  const [esquema,tabela]=alvo.split('.'),colunas=(await tx.query<{nome:string;tipo:string}>('SELECT attname nome,format_type(atttypid,atttypmod) tipo FROM pg_attribute WHERE attrelid=$1::regclass AND attnum>0 AND NOT attisdropped ORDER BY attnum',[alvo])).rows;
+  const pk=tabela==='contact_cooldowns'?['contact_phone','rule_id']:['id'];catalogo.push({esquema,tabela,colunas,pk});
+  await destino.query(`CREATE TABLE donatella_${esquema}.${tabela}(${colunas.map(c=>`"${c.nome}" ${c.tipo}`).join(',')},PRIMARY KEY(${pk.join(',')}))`);
+  const pagina=decodificarCarga((await tx.query<{pagina:string}>('SELECT public.donatella_migracao_copia_final($1,$2,$3)::text pagina',[preparada.execucao,esquema,tabela])).rows[0].pagina) as Omit<Extract<DocumentoCarga,{tipo:'snapshot'}>,'tipo'|'id'|'execucao'>;
+  const carga=prepararCarga({...pagina,tipo:'snapshot',execucao:execucaoCopia,id:randomUUID()});cargas.push(carga);
+  await destino.query('INSERT INTO atendimento_migracao.carga_documento VALUES($1,$2,$3,$4,$5)',[execucaoCopia,carga.documento.id,carga.documento.tipo,carga.hash,carga.cifrado]);
+  for(const estado of carga.estados)await destino.query('INSERT INTO atendimento_migracao.carga_registro VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[execucaoCopia,estado.schema,estado.tabela,estado.chaveHash,estado.sequencia,estado.excluido,carga.documento.id,estado.indice]);
+ }
+ await destino.query('ALTER TABLE donatella_public.appointments ADD CONSTRAINT appointments_contato FOREIGN KEY(contact_id) REFERENCES donatella_public.contacts(id) DEFERRABLE INITIALLY DEFERRED');
+ const materializar=criarMaterializador(destino,catalogo,execucaoCopia),appointment=cargas.find(c=>c.documento.tipo==='snapshot'&&c.documento.tabela==='appointments')!;
+ try{await materializar(appointment);throw Error('COPIA_FINAL_ENSAIO_FK_PAGINA_ISOLADA');}catch(e){if((e as {code?:string}).code!=='23503')throw e;asserts++;}
+ conferir((await destino.query('SELECT count(*)::int quantidade FROM atendimento_migracao.materializacao')).rows[0].quantidade===0,'COPIA_FINAL_ENSAIO_ROLLBACK_INTEIRO');
+ const finalTx=await destino.connect();try{await finalTx.query('BEGIN');await finalTx.query('SET CONSTRAINTS ALL DEFERRED');for(const carga of cargas)await materializar.aplicarTx(finalTx,carga);await finalTx.query('COMMIT');}catch(e){await finalTx.query('ROLLBACK');throw e;}finally{finalTx.release();}
+ conferir((await destino.query('SELECT count(*)::int quantidade FROM atendimento_migracao.materializacao')).rows[0].quantidade===37,'COPIA_FINAL_ENSAIO_37_DOCUMENTOS');
+ conferir((await destino.query('SELECT contact_id FROM donatella_public.appointments')).rows[0].contact_id===id,'COPIA_FINAL_ENSAIO_RELACAO');
+ const contato=(await destino.query<{valor:string;instante:string}>("SELECT valor::text, to_char(alterado_em AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US') instante FROM donatella_public.contacts")).rows[0];
+ conferir(contato.valor==='9007199254740993.123456'&&contato.instante==='2026-10-10 01:02:03.123456','COPIA_FINAL_ENSAIO_PRECISAO');
+ conferir((await materializar(appointment)).repetida,'COPIA_FINAL_ENSAIO_REPLAY_IDEMPOTENTE');
+ await tx.query(preparada.retorno);conferir((await tx.query('SELECT whatsapp_access_token,is_active,auto_response_enabled FROM public.nina_settings')).rows[0].is_active===true,'MANUTENCAO_ENSAIO_RETORNO');conferir((await tx.query('SELECT active FROM cron.job WHERE jobid=1')).rows[0].active===true,'MANUTENCAO_ENSAIO_CRON_RETORNO');conferir((await tx.query('SELECT active FROM cron.job WHERE jobid=2')).rows[0].active===false,'MANUTENCAO_ENSAIO_CRON_ORIGINAL');
+ conferir((await tx.query('SELECT count(*)::int quantidade FROM cron.alter_ensaio_log')).rows[0].quantidade===3,'MANUTENCAO_ENSAIO_CRON_API_RETORNO');
+ await tx.query('UPDATE public.contacts SET id=id');conferir((await tx.query('SELECT ativa FROM donatella_corte_privado.execucao')).rows[0].ativa===false,'MANUTENCAO_ENSAIO_PROVA_PRESERVADA');
+ console.log(JSON.stringify({assercoes:asserts,ambiente:'banco exclusivamente fictício',origemRealAlterada:false,enviosExternos:0,estadoPreservado:true}));
+}finally{tx.release();await Promise.all([pool.end(),destino.end()]);}

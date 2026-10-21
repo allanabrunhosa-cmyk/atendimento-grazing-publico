@@ -1,0 +1,49 @@
+/* A entrada operacional compartilha as fontes, os tokens e as primitives do HUB. */
+@import "../../src/app/globals.css";
+@source "./operacao-login.tsx";
+@source "../../src/app/login/painel-acesso.tsx";
+@source "../../src/components/logo.tsx";
+@source "../../src/components/logo-etiquetas.tsx";
+@source "../../src/components/campo-senha.tsx";
+@source "../../src/components/ui/card.tsx";
+@source "../../src/components/ui/input.tsx";
+@source "../../src/components/ui/label.tsx";
+@source "../../src/components/ui/button.tsx";
+
+/* A geometria continua compartilhada; a paleta vem do registro do Atendimento. */
+html.light[data-identidade="atendimento"] {
+  --ds-controle-raio: 0.75rem;
+  --background: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --primary-foreground: var(--brand-white);
+  --secondary: color-mix(in srgb, var(--card) 92%, var(--primary) 8%);
+  --secondary-foreground: var(--foreground);
+  --muted: color-mix(in srgb, var(--card) 94%, var(--primary) 6%);
+  --accent: var(--secondary);
+  --accent-foreground: var(--foreground);
+  --input: var(--border);
+  --ring: var(--primary);
+  --ambiente-azul: color-mix(in srgb, var(--primary) 12%, transparent);
+  --ambiente-verde: color-mix(in srgb, var(--brand-blue) 6%, transparent);
+  --vidro-fundo: color-mix(in srgb, var(--card) 78%, transparent);
+  --vidro-borda: color-mix(in srgb, var(--border) 70%, var(--card) 30%);
+  --vidro-sombra: 0 8px 32px -18px color-mix(in srgb, var(--primary) 25%, transparent), inset 0 1px 0 color-mix(in srgb, var(--card) 80%, transparent);
+  accent-color: var(--primary);
+}
+
+html.light[data-identidade="atendimento"] #entrar:not(:disabled):hover {
+  background-color: var(--primary-hover);
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  html.light[data-identidade="atendimento"] {
+    --vidro-fundo: var(--card);
+    --vidro-borda: var(--border);
+  }
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  html.light[data-identidade="atendimento"] { --vidro-fundo: var(--card); }
+}

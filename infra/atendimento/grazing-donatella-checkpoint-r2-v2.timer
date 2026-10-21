@@ -1,0 +1,10 @@
+[Unit]
+Description=Donatella V2 - checkpoint externo semanal independente
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00 UTC
+Persistent=true
+Unit=grazing-donatella-checkpoint-r2-v2.service
+
+[Install]
+WantedBy=timers.target

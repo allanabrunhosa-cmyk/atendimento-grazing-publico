@@ -1,0 +1,41 @@
+# Atualização exclusiva do coletor existente, sem reiniciar a consulta ou o HUB.
+name: grazing-donatella-consulta-v2
+services:
+  coletor:
+    image: ${DONATELLA_COLETOR_IMAGEM:?imagem existente verificada}
+    container_name: grazing-donatella-coletor-v2
+    command: [/release/iniciar-runtime.mjs, supervisionar]
+    restart: unless-stopped
+    stop_grace_period: 90s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    cpus: 1
+    pids_limit: 128
+    volumes:
+      - ${DONATELLA_COLETOR_RELEASE:?release revisada}:/release:ro
+      - ${DONATELLA_COLETOR_CONFIG:?configuracao privada existente}:/run/secrets/coletor.json:ro
+      - ${ATENDIMENTO_INDICE_MIDIA:?indice privado de midia}:/run/secrets/media-index.json:ro
+      - ${ATENDIMENTO_MIDIA_ORIGEM:?midia privada preservada}:/midia:ro
+      - estado:/estado
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    networks: [privada,saida]
+    healthcheck:
+      test: [CMD, node, /release/saude-coletor.mjs]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+volumes:
+  estado:
+    external: true
+    name: grazing-donatella-coletor-v2-estado
+networks:
+  privada:
+    external: true
+    name: grazing-donatella-homologacao-v2-privada
+  saida:
+    external: true
+    name: grazing-donatella-coletor-v2-saida

@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "allowJs": true,
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "scripts/**/*.ts",
+    "scripts/**/*.tsx",
+    "apps/atendimento-chat-consulta/**/*.ts",
+    "apps/atendimento-chat-consulta/**/*.tsx",
+    "apps/atendimento-chat-consulta/**/*.mts",
+    "apps/atendimento/preview/identidade.ts",
+    "testes/**/*.ts",
+    "testes/**/*.tsx",
+    "vitest.config.mts"
+  ],
+  "exclude": [
+    "node_modules",
+    "src/generated"
+  ]
+}

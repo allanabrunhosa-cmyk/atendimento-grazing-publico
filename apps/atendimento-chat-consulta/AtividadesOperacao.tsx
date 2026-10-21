@@ -1,0 +1,18 @@
+import {useEffect,useState} from 'react';
+import {ChevronLeft,ChevronRight,RefreshCw} from 'lucide-react';
+import {Escolha} from './operacao-ui';
+import type {ClienteOperacao,PaginaAtividadesOperacao,SessaoOperacao} from './operacao-api';
+
+export default function AtividadesOperacao({cliente,sessao,falhar}:{cliente:ClienteOperacao;sessao:SessaoOperacao;falhar:(e:unknown)=>void}){
+ const podeConsultar=sessao.usuario.permissoes.includes('atividades.visualizar')||sessao.usuario.permissoes.includes('atividades.equipe.visualizar');
+ const [usuario,setUsuario]=useState(''),[categoria,setCategoria]=useState(''),[pagina,setPagina]=useState(0),[revisao,setRevisao]=useState(0),[resultado,setResultado]=useState<PaginaAtividadesOperacao|null>(null),[ocupado,setOcupado]=useState(false);
+ useEffect(()=>{if(!podeConsultar)return;const c=new AbortController();queueMicrotask(async()=>{if(c.signal.aborted)return;setOcupado(true);try{const r=await cliente.atividades({usuario,categoria,pagina},c.signal);if(!c.signal.aborted)setResultado(r);}catch(e){if(!c.signal.aborted)falhar(e);}finally{if(!c.signal.aborted)setOcupado(false);}});return()=>c.abort();},[cliente,usuario,categoria,pagina,revisao,falhar,podeConsultar]);
+ if(!podeConsultar)return <p className="muted">Visualizar atividades exige permissão no HUB.</p>;
+ return <section className="panel operacao-form atividades-operacao" aria-label="Extrato de atividades" aria-busy={ocupado}>
+  <div className="toolbar"><h2>Atividades</h2><span className="flex-spacer"/><button className="btn" disabled={ocupado} onClick={()=>setRevisao(v=>v+1)}><RefreshCw size={16}/>Atualizar</button></div>
+  <p className="muted">{resultado?.todos?'Atividades dos atendentes.':'Suas atividades de atendimento.'} Aberturas, alterações e uso de templates. Mensagens individuais ficam no histórico da conversa.</p>
+  <div className="form-grid atividades-filtros"><label htmlFor="atividades-usuario">Usuário<Escolha id="atividades-usuario" label="Filtrar atividades por usuário" value={usuario||'__todos__'} disabled={ocupado||!resultado?.todos} options={[{valor:'__todos__',rotulo:resultado?.todos?'Todos os usuários':sessao.usuario.nome},...(resultado?.usuarios??[]).map(u=>({valor:u.id,rotulo:u.nome}))]} onChange={v=>{setUsuario(v==='__todos__'?'':v);setPagina(0);}}/></label><label htmlFor="atividades-categoria">Categoria<Escolha id="atividades-categoria" label="Filtrar atividades por categoria" value={categoria||'__todas__'} disabled={ocupado} options={[{valor:'__todas__',rotulo:'Todas as categorias'},{valor:'conversas',rotulo:'Conversas'},{valor:'contatos',rotulo:'Contatos'},{valor:'templates',rotulo:'Templates'},{valor:'organizacao',rotulo:'Organização'}]} onChange={v=>{setCategoria(v==='__todas__'?'':v);setPagina(0);}}/></label></div>
+  {ocupado?<p role="status">Carregando atividades…</p>:resultado?.registros.length?<ol className="atividades-extrato">{resultado.registros.map(a=><li key={a.id}><div><strong>{a.titulo}</strong><p>{a.autorNome||'Sistema'} · {a.categoria==='organizacao'?'Organização':a.categoria[0].toUpperCase()+a.categoria.slice(1)}</p>{a.detalhe&&<small className="muted">{a.detalhe}</small>}</div><time dateTime={a.criadaEm}>{new Date(a.criadaEm).toLocaleString('pt-BR')}</time></li>)}</ol>:<p className="empty-state">Nenhuma atividade neste filtro.</p>}
+  <div className="paginacao"><button className="btn icon" aria-label="Página anterior de atividades" disabled={!pagina||ocupado} onClick={()=>setPagina(v=>v-1)}><ChevronLeft size={16}/></button><span>Página {pagina+1}</span><button className="btn icon" aria-label="Próxima página de atividades" disabled={!resultado?.mais||ocupado} onClick={()=>setPagina(v=>v+1)}><ChevronRight size={16}/></button></div>
+ </section>;
+}
