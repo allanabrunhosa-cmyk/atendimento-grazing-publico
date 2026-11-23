@@ -19,6 +19,13 @@ npm run dev
 
 `dev` abre a interface local. Não conecte testes a bancos ou canais reais. Testes padrão usam simulações. As configurações privadas ficam na VPS, fora do Git.
 
+### Painel com dados fictícios
+
+`npm run dev:ficticio` abre o painel em <http://127.0.0.1:4192/operacao/chat?ambiente=ensaio> com uma API em memória.
+Não precisa de banco nem de login, e nada sai do computador: a Donatella não chama a IA, o chat não envia ao WhatsApp e o site não é consultado.
+Conhecimento, dúvidas e condições de entrega usam as mesmas regras e rotas do servidor real; o "Testar Donatella" mostra o assunto e as fontes que ela usaria.
+Os dados são de exemplo e voltam ao início a cada execução. Serve para conferir telas antes do PR; não substitui os testes nem um ambiente com banco.
+
 Depois de validar, integre a alteração à `main` por pull request. A publicação exige checkout limpo e a mesma revisão no GitHub:
 
 ```sh
