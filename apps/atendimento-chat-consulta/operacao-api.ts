@@ -30,6 +30,14 @@ export type EquipeOperacao = {usuarios:{id:string;nome:string}[];equipes:{id:str
 export type ModeloOperacao = {id:string;nome:string;idioma:string;estado:string;variaveis:string[];suportado:boolean;componentes?:unknown[];categoria?:string|null;versao?:number};
 export type ConfiguracaoOperacao = {versao:number;agente:{modo:'desligado'|'rascunho'|'automatico';modelo:string};horarios:{inicio:string;fim:string;dias:number[]};automacoes:boolean;enviosReais:boolean};
 export type FollowupOperacao = {configuracao:{habilitado:boolean;minutos:number;texto:string};versao:number;origem:'legado'|'local'|'ausente'};
+export type CategoriaFonteOficial = 'procedimento'|'produto'|'politica';
+export type ItemImportacaoConhecimento = {pergunta:string;resposta:string;categoria:CategoriaFonteOficial;condicoes?:string};
+export type ResultadoImportacaoOperacao = {indice:number;estado:'criado'|'existente'|'recusado';codigo?:string};
+export type EntregaOperacao = {versao:number;texto:string;aprovada:boolean};
+/** Mesmo limite do servidor: o corpo JSON também precisa caber em 64 KB. */
+export const LIMITE_LOTE_IMPORTACAO = 25;
+/** A Donatella lê no máximo 3.000 caracteres das condições de entrega. */
+export const LIMITE_TEXTO_ENTREGA = 3000;
 export type AgendaOperacao = {id:string;conversaId:string|null;titulo:string;inicio:string;fim:string;responsavelId:string|null;versao:number;ficticia:boolean};
 export type ItemPipelineOperacao = {id:string;conversaId:string;titulo:string;etapa:string;etapaNome:string;responsavelId:string|null;atividade:string|null;versao:number;ficticia:boolean};
 export type StatusAutomacoesPedido = {habilitado:boolean;enviosLiberados:boolean;regras:number;pendentes:number;enfileiradas:number;canceladas:number;ultimaRecepcao:string|null};
@@ -193,7 +201,11 @@ export function criarClienteOperacao(buscar:typeof fetch=fetch,ambiente:'operaca
   async enfileirarDuvida(dados:{casoId:string;revisao:number}){return pedido('/duvidas/enfileirar','POST',dados);},
   async encerrarDuvida(dados:{casoId:string;revisao:number}){return pedido('/duvidas/encerrar','POST',dados);},
   async sugerirConhecimento(dados:{casoId:string;pergunta:string;resposta:string;categoria:string;escopo:string;clienteId?:string;condicoes:string;vigenteDe:string;vigenteAte:string;conflitos:string[];responsavelId:string}){return pedido('/conhecimento/sugerir','POST',dados);},
-  async conhecimento():Promise<CandidatoConhecimento[]>{const d=await pedido('/conhecimento');return registros(d.candidatos,100) as unknown as CandidatoConhecimento[];},
+  async conhecimento():Promise<CandidatoConhecimento[]>{const d=await pedido('/conhecimento');return registros(d.candidatos,1000) as unknown as CandidatoConhecimento[];},
+  async cadastrarConhecimento(dados:{pergunta:string;resposta:string;categoria:CategoriaFonteOficial;condicoes:string;vigenteDe:string;vigenteAte:string;responsavelId:string}){return pedido('/conhecimento/cadastrar','POST',dados);},
+  async importarConhecimentos(dados:{itens:ItemImportacaoConhecimento[];vigenteDe:string;vigenteAte:string;responsavelId:string}):Promise<ResultadoImportacaoOperacao[]>{const d=await pedido('/conhecimento/importar','POST',dados);return registros(d.resultados,LIMITE_LOTE_IMPORTACAO).map(r=>{if(!['criado','existente','recusado'].includes(String(r.estado)))throw new ErroOperacao('INVALIDO');return {indice:inteiro(r.indice),estado:r.estado as ResultadoImportacaoOperacao['estado'],...(r.codigo===undefined?{}:{codigo:texto(r.codigo,80)})};});},
+  async entrega():Promise<EntregaOperacao>{const d=await pedido('/agente/entrega');return {versao:inteiro(d.versao),texto:texto(d.texto,LIMITE_TEXTO_ENTREGA),aprovada:booleano(d.aprovada)};},
+  async configurarEntrega(dados:{texto:string;aprovada:boolean;versao:number;idempotencia:string}){return pedido('/agente/entrega/configurar','POST',dados);},
   async revisarConhecimento(dados:{id:string;revisao:number;decisao:'aprovar'|'rejeitar';motivo:string;minimizacaoRevisada:boolean;conflitosResolvidos:boolean}){return pedido('/conhecimento/revisar','POST',dados);},
   async revogarConhecimento(dados:{id:string;revisao:number;motivo:string}){return pedido('/conhecimento/revogar','POST',dados);},
   async substituirConhecimento(dados:{id:string;revisao:number;resposta:string;motivo:string;vigenteAte:string}){return pedido('/conhecimento/substituir','POST',dados);},

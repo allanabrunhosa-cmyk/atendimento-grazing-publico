@@ -1,7 +1,7 @@
 import 'server-only';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { ServicoDuvidas, type AtorDuvidas, type PermissaoDuvidas, type TransacaoDuvidas } from './duvidas-aprendizagem';
+import { ServicoDuvidas, possuiDadosPessoais, type AtorDuvidas, type PermissaoDuvidas, type TransacaoDuvidas } from './duvidas-aprendizagem';
 import { criarRepositorioDuvidasPg } from './repositorio-duvidas-pg';
 import { contextoAtualIA, orquestrarIA, type FonteIA, type TarefaIA,type DecisaoIA,type FerramentaIA } from './ia-orquestrador';
 import { criarProvedorEvidenciasDireto } from './ia-orquestrador-direto';
@@ -85,6 +85,13 @@ export function criarServicoDuvidasOperacional(operacao:RepositorioOperacaoPg,em
  });
 }
 
+/** A ferramenta de entrega lê no máximo 3.000 caracteres. Texto aprovado não
+ * pode ficar vazio nem carregar telefone, e-mail ou CPF. */
+export function validarCondicoesEntrega(p:{texto:unknown;aprovada:unknown}){
+ if(typeof p.texto!=='string'||p.texto.length>3000||/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(p.texto)||typeof p.aprovada!=='boolean'||p.aprovada&&!p.texto.trim())throw Error('AGENTE_ENTREGA_INVALIDA');
+ if(possuiDadosPessoais(p.texto))throw Error('AGENTE_ENTREGA_DADOS_PESSOAIS');
+}
+
 /** Mesmo orquestrador, PostgreSQL, fila e fornecedores usados na operação.
  * Só as fronteiras externas são injetáveis nos ensaios; nada usa fixtures do lab. */
 export class ServicoAgenteOperacional {
@@ -105,6 +112,22 @@ export class ServicoAgenteOperacional {
     await this.d.operacao.auditar(tx,i,'agente_followup','configurar_followup',Number(r.rows[0].versao));return {versao:Number(r.rows[0].versao)};
    });
   });
+ }
+ /** Condições de entrega que a ferramenta delivery_conditions entrega à agente.
+  * Só valem com entregaAprovada; a habilidade Entrega é ligada à parte. */
+ async entrega(i:IdentidadeOperacao){
+  return this.d.operacao.transacao(async tx=>{
+   await this.d.operacao.exigir(tx,i,'ia.visualizar');
+   const r=(await tx.query<{conteudo:{condicoesEntrega?:unknown;entregaAprovada?:unknown};versao:string}>("SELECT conteudo,versao FROM atendimento_operacao.configuracao WHERE chave='atendimento'")).rows[0];
+   return {versao:Number(r?.versao??0),texto:typeof r?.conteudo.condicoesEntrega==='string'?r.conteudo.condicoesEntrega:'',aprovada:r?.conteudo.entregaAprovada===true};
+  });
+ }
+ async configurarEntrega(i:IdentidadeOperacao,p:{texto:string;aprovada:boolean;versao:number;idempotencia:string}){
+  validarCondicoesEntrega(p);
+  // O que a agente diz exige ia.editar; a gravação na configuração exige ainda "configurar".
+  if(!await this.d.operacao.autorizar(i,'ia.editar'))throw Error('OPERACAO_ACESSO_NEGADO');
+  const r=await this.d.operacao.configurar(i,{chave:'atendimento',conteudo:{condicoesEntrega:p.texto.trim(),entregaAprovada:p.aprovada},versao:p.versao,idempotencia:p.idempotencia});
+  return {versao:Number(r.versao)};
  }
  async estado(i:IdentidadeOperacao) {
   if(!await this.d.operacao.autorizar(i,'ia.visualizar'))throw Error('OPERACAO_ACESSO_NEGADO');
@@ -196,10 +219,9 @@ export class ServicoAgenteOperacional {
  }
  private async conhecimento(t:TarefaIA):Promise<FonteIA[]> {
   const ator=atorDuvidas(IDENTIDADE_AGENTE,t.empresaId);
-  const termos=[...new Set([t.tema,...(t.pergunta.toLocaleLowerCase('pt-BR').match(/t[aá]buas?|presentes?|eventos?|personaliza[cç][aã]o|composi[cç][aã]o|atendimento|embalage[mn]s?|conserva[cç][aã]o|retirada/g)??[])])].slice(0,5);
-  const consultas=await Promise.all(termos.map(tema=>this.duvidas(IDENTIDADE_AGENTE).consultarConhecimento(ator,{empresaId:t.empresaId,tema,clienteId:t.clienteId,conversaId:t.conversaId})));
-  const encontrados=[...new Map(consultas.flat().map(f=>[f.id,f])).values()];
-  const fontes:FonteIA[]=encontrados.slice(0,10).filter(f=>f.conteudo.length<=4000).map(f=>({id:f.id,versao:f.versao,empresaId:t.empresaId,clienteId:t.clienteId,tema:t.tema,origem:'conhecimento',estado:'aprovado',inicio:0,fim:Date.parse(f.vigenteAte),conteudo:f.conteudo}));
+  // Uma consulta só, ordenada pelas palavras da pergunta; as 10 mais relevantes seguem ao modelo.
+  const encontrados=await this.duvidas(IDENTIDADE_AGENTE).consultarConhecimentoRelevante(ator,{empresaId:t.empresaId,tema:t.tema,pergunta:t.pergunta,clienteId:t.clienteId,conversaId:t.conversaId,limite:10});
+  const fontes:FonteIA[]=encontrados.filter(f=>f.conteudo.length<=4000).map(f=>({id:f.id,versao:f.versao,empresaId:t.empresaId,clienteId:t.clienteId,tema:t.tema,origem:'conhecimento',estado:'aprovado',inicio:0,fim:Date.parse(f.vigenteAte),conteudo:f.conteudo}));
   // Saudação operacional não contém preço, prazo ou regra comercial presumida.
   if(t.tema==='procedimento'&&/^(ol[aá]|oi|bom dia|boa tarde|boa noite|obrigad[oa])(?:[!.,\s]*)$/i.test(t.pergunta.trim()))fontes.push({id:'donatella_saudacao_v1',versao:1,empresaId:t.empresaId,clienteId:t.clienteId,tema:t.tema,origem:'conhecimento',estado:'aprovado',inicio:0,fim:Date.now()+60000,conteudo:'Olá! Sou a Donatella, assistente da Grazing Table & Co. Como posso ajudar você hoje?'});
   return fontes;

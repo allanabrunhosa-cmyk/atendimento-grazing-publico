@@ -6,6 +6,7 @@ import { Escolha } from './operacao-ui';
 import { limparTextoOperacao, type ClienteOperacao, type SessaoOperacao, type SkillsOperacao, type TomOperacao } from './operacao-api';
 import {StatusComercialOperacao} from './ComercialConversa';
 import PainelAgenteDonatella from './AgenteDonatella';
+import CondicoesEntregaDonatella from './CondicoesEntrega';
 
 type Props = {cliente:ClienteOperacao;sessao:SessaoOperacao;falhar:(e:unknown)=>void;avisar:(s:string)=>void;alteracoes?:(id:string,ativo:boolean)=>void};
 const linha = (s:string,max:number)=>limparTextoOperacao(s,max).replace(/[\r\n\t]/g,'');
@@ -17,7 +18,7 @@ export default function ConfiguracoesDonatella(p:Props & {tela:'agente'|'tom'}) 
 }
 
 function AgenteDonatella(p:Props) {
- return <div className="operacao-paineis configuracao-donatella"><StatusComercialOperacao cliente={p.cliente} podeConsultar={p.sessao.usuario.permissoes.includes('consultar')}/>{p.sessao.usuario.permissoes.includes('ia.visualizar')&&<PainelAgenteDonatella {...p}/>} {p.sessao.usuario.permissoes.includes('skills.visualizar')&&<SkillsDonatella {...p}/>}</div>;
+ return <div className="operacao-paineis configuracao-donatella"><StatusComercialOperacao cliente={p.cliente} podeConsultar={p.sessao.usuario.permissoes.includes('consultar')}/>{p.sessao.usuario.permissoes.includes('ia.visualizar')&&<PainelAgenteDonatella {...p}/>}{p.sessao.usuario.permissoes.includes('ia.visualizar')&&<CondicoesEntregaDonatella {...p}/>} {p.sessao.usuario.permissoes.includes('skills.visualizar')&&<SkillsDonatella {...p}/>}</div>;
 }
 function SkillsDonatella({cliente,sessao,falhar,avisar,alteracoes}:Props) {
  const [base,setBase]=useState<SkillsOperacao|null>(null),[draft,setDraft]=useState<SkillsOperacao['conteudo']|null>(null),[ocupado,setOcupado]=useState(false),[remover,setRemover]=useState<string|null>(null);
