@@ -52,3 +52,13 @@ O espaço livre inicial do C: foi 16,5 GB. O checkout e as dependências existen
 - O alvo é limitado a 507 caracteres no SQL e validado por completo no JavaScript. Isso evita os quantificadores acima de 255 que a expressão POSIX do PostgreSQL não admite.
 - `scripts/atendimento/operacao-runtime.ts` conecta o novo leitor, mantendo o leitor de contatos independente. Sem permissão de mensagens, nenhum dos leitores recebe referências.
 - `apps/atendimento-chat-consulta/TextoMensagem.tsx` impede balões vazios sem duplicar o conteúdo de cartões ou anexos.
+
+## Álbum, localização, troca de número e áudio gravado — 26/11/2026
+
+Diagnóstico somente de leitura na origem durável, sem imprimir conteúdo de conversas. A maior parte das mensagens `unsupported` traz `unsupported.type=unknown`: a Meta não entrega conteúdo e o aviso existente permanece. As demais trazem `unsupported.type=album`; em todas, as mídias chegaram como mensagens próprias em poucos segundos. O aviso antigo pedia um reenvio desnecessário.
+
+- `operacao-mensagem-recebida.ts`: projeção `album` com texto próprio, sem pedir reenvio. Vale para mensagens novas; as antigas já têm o aviso anterior persistido e não são alteradas.
+- `operacao-mensagem-entrada.ts`: `location` vira texto com nome, endereço e link do mapa; `system/user_changed_number` informa o novo número. Coordenadas e número são validados; o texto livre da Meta não é repassado. O tipo persistido continua `unsupported`.
+- `operacao-audio-mp4.ts`: o gravador do Chrome gera AAC em MP4 fragmentado. A Meta aceitava o POST e recusava a mídia com o erro 131053; os áudios gravados no Chat não eram entregues. O envio reembala o áudio em MP4 progressivo, sem recodificar. O anexo guardado não muda, então "Tentar novamente" reaproveita a gravação. Estrutura inesperada mantém o arquivo original.
+
+Validação: bateria completa, tipos, lint e compilação. A amostra `testes/atendimento/fixtures/audio-chrome-fragmentado.m4a` é um tom sintético gravado pelo MediaRecorder; o resultado reembalado foi decodificado no navegador com amostras idênticas às do original. Não houve envio de mensagem de teste: a aceitação pela Meta só se confirma no primeiro envio real.
