@@ -86,7 +86,7 @@ export class ServicoLaboratorio {
         empresaId: EMPRESA_LAB, conversaId: tarefa.conversaId, versaoConversa: tarefa.versao, mensagemOrigemId: tarefa.mensagemOrigemId,
         pergunta: tarefa.pergunta, contextoFactual: `Contato fictício. Tema: ${tarefa.tema}. Motivo do apoio: ${motivo}. Modo: simulação/rascunho. Nenhum envio externo.`,
         dadosNecessarios: "Resposta humana revisada para este ensaio fictício.", fontes: fontes.map(f => ({ id: f.id, versao: f.versao })),
-        motivo: motivo === "REVISAO_HUMANA_OBRIGATORIA" ? "decisao_humana" : motivo === "FONTES_CONFLITANTES" ? "conflito" : motivo.includes("INDISPONIVEL") ? "ferramenta_indisponivel" : "fonte_insuficiente",
+        motivo: ["REVISAO_HUMANA_OBRIGATORIA", "PEDIDO_CORPORATIVO", "DIFICULDADE_NO_SITE", "ORCAMENTO"].includes(motivo) ? "decisao_humana" : motivo === "FONTES_CONFLITANTES" ? "conflito" : motivo.includes("INDISPONIVEL") ? "ferramenta_indisponivel" : "fonte_insuficiente",
         equipeId: "demo-equipe", prioridade: "normal", exigirRevisao: motivo === "MOTIVO_ORIGINAL_NAO_PRESERVADO", expiraEm: new Date(Date.now() + 86400000).toISOString(),
       }),
     });

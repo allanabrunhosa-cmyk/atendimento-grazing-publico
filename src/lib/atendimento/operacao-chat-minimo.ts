@@ -32,5 +32,5 @@ export function escritaChatPermitida(path:string,corpo:Record<string,unknown>){
 
 /** Amplia somente a administração da agente e o apoio interno existente. */
 export function escritaPainelDonatellaPermitida(path:string,corpo:Record<string,unknown>){
- return ['/comercial/vinculos/salvar','/agente/configurar','/agente/controle','/agente/reconciliar','/agente/testar','/agente/skills/configurar','/agente/tom/configurar','/conhecimento/sugerir','/conhecimento/revisar','/conhecimento/revogar','/conhecimento/substituir','/duvidas/responder','/duvidas/assumir','/duvidas/preparar','/duvidas/enfileirar','/duvidas/encerrar','/configuracao'].includes(path)||/^\/conversa\/[a-f0-9-]{36}\/acao$/i.test(path)&&corpo.acao==='ia';
+ return ['/comercial/vinculos/salvar','/agente/configurar','/agente/controle','/agente/reconciliar','/agente/testar','/agente/skills/configurar','/agente/tom/configurar','/conhecimento/sugerir','/conhecimento/revisar','/conhecimento/revogar','/conhecimento/substituir','/conhecimento/cadastrar','/conhecimento/importar','/agente/entrega/configurar','/agente/prompt/configurar','/duvidas/responder','/duvidas/assumir','/duvidas/preparar','/duvidas/enfileirar','/duvidas/encerrar','/configuracao'].includes(path)||/^\/conversa\/[a-f0-9-]{36}\/acao$/i.test(path)&&corpo.acao==='ia';
 }

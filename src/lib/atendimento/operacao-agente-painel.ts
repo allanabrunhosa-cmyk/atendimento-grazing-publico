@@ -1,7 +1,7 @@
 import 'server-only';
 import type {PoolClient} from 'pg';
 import type {ConfiguracaoPrivadaAgente} from './operacao-agente';
-import type {ConfiguracaoAgente,ConfiguracaoSkillsAgente,TomAgente} from './repositorio-agente-pg';
+import type {ConfiguracaoAgente,ConfiguracaoSkillsAgente,PromptCentralAgente,TomAgente} from './repositorio-agente-pg';
 import {hashConfiguracaoAgente,invalidarConfiguracaoAgenteTx,validarConfiguracaoAgente,perfilEstiloAgente,skillPermiteAgente,temaPergunta} from './repositorio-agente-pg';
 import {hashOperacao,type RepositorioOperacaoPg} from './operacao-repositorio-pg';
 import type {IdentidadeOperacao} from './operacao-tipos';
@@ -110,7 +110,7 @@ export async function controlarAgente(d:DependenciasPainel,i:IdentidadeOperacao,
 
 /** Usa a mesma política e o mesmo adaptador da operação, com contexto novo em
  * memória. Nunca cria contato, tarefa operacional, intenção ou mensagem Meta. */
-export async function testarAgente(d:DependenciasPainel&{configuracao:()=>Promise<{configuracao:ConfiguracaoAgente;versao:number;tom:TomAgente;skills:ConfiguracaoSkillsAgente}>;chave:(c:ConfiguracaoAgente)=>string;transporte:typeof fetch},i:IdentidadeOperacao,p:{pergunta:string;versao:number;idempotencia:string}):Promise<ResultadoTesteDonatella>{
+export async function testarAgente(d:DependenciasPainel&{configuracao:()=>Promise<{configuracao:ConfiguracaoAgente;versao:number;tom:TomAgente;skills:ConfiguracaoSkillsAgente;prompt?:PromptCentralAgente}>;chave:(c:ConfiguracaoAgente)=>string;transporte:typeof fetch},i:IdentidadeOperacao,p:{pergunta:string;versao:number;idempotencia:string}):Promise<ResultadoTesteDonatella>{
  validarVersaoOperacao(p.versao);validarIdOperacao(p.idempotencia);validarTextoOperacao(p.pergunta,4000);
  if(i.tipo!==undefined&&i.tipo!=='usuario')throw Error('OPERACAO_ACESSO_NEGADO');
  const cfg=await d.configuracao(),c=cfg.configuracao,provedor=c.provedor??'anthropic',hash=hashConfiguracaoAgente(p);
@@ -133,7 +133,7 @@ export async function testarAgente(d:DependenciasPainel&{configuracao:()=>Promis
  const repositorio:RepositorioIA={contexto:async()=>await vigente()?contexto:null,reservar:async()=>({lease:p.idempotencia}),reservarChamada:async()=>++chamadas<=c.limites.maxChamadas,preservarApoio:async(_t,_l,v)=>v,concluir:async(_t,_l,v)=>{decisao=v;return v;}};
  const fontes=new Map<string,FonteIA>();
  const registrarFontes=(novas:FonteIA[])=>{novas.forEach(f=>fontes.set(f.id,f));return novas;};
- const modelo=criarProvedorEvidenciasDireto({chave:d.chave(c),modelo:c.modelo,provedor,maxTokens:c.maxTokens,respostaRedigida:true,estilo:perfilEstiloAgente(cfg.tom,cfg.skills,tarefa.tema),registrarConsumo:async o=>{observacao=o;await d.operacao.transacao(tx=>tx.query('UPDATE atendimento_operacao.agente_teste SET consumo=$2::jsonb WHERE id=$1',[p.idempotencia,JSON.stringify(o)]));}},d.transporte);
+ const modelo=criarProvedorEvidenciasDireto({chave:d.chave(c),modelo:c.modelo,provedor,maxTokens:c.maxTokens,respostaRedigida:true,estilo:perfilEstiloAgente(cfg.tom,cfg.skills,tarefa.tema),promptCentral:cfg.prompt?.texto??'',...(c.esforco?{esforco:c.esforco}:{}),registrarConsumo:async o=>{observacao=o;await d.operacao.transacao(tx=>tx.query('UPDATE atendimento_operacao.agente_teste SET consumo=$2::jsonb WHERE id=$1',[p.idempotencia,JSON.stringify(o)]));}},d.transporte);
  let resultado:ResultadoTesteDonatella;
  try{
   const r=await orquestrarIA(tarefa,c.limites,{repositorio,respostaRedigida:true,autorizar:async()=>vigente(),conhecimento:async t=>registrarFontes(skillPermiteAgente(cfg.skills,t.tema,'consultar_conhecimento')?fontesConhecimentoEnsaio(t):[]),ferramenta:async(nome,t,sinal)=>{if(sinal.aborted||!skillPermiteAgente(cfg.skills,t.tema,nome))return [];return registrarFontes(fontesFerramentaEnsaio(nome,t));},provedor:async(pedido,sinal)=>{

@@ -1,6 +1,7 @@
 import 'server-only';
 import {validarPedidoIA,postJsonIA,lerConsumoIA,conferirChamadaRespostaIA} from './ia-provedor-comum';
 import type {PedidoIADireta,RespostaIADireta,MensagemIA} from './ia-provedor-tipos';
+import {ESFORCO_API,ESFORCOS_IA,perfilModeloIA} from './ia-modelos';
 
 type Chamada = {id: string;type: 'function';function: {name: string;arguments: string}};
 export type ImagemIA = {mime: 'image/jpeg'|'image/png'|'image/webp'|'image/gif';base64: string};
@@ -39,6 +40,9 @@ function converterMensagens(mensagens: MensagemIA[]) {
   }
   if(pendentes.size||!saida.length||saida[0].role!=='user')falhar();return saida;
 }
+/** Modelos que garantem o formato da resposta por esquema. Nos demais, o contrato
+ * do texto e a leitura do adaptador continuam valendo. */
+const garanteFormato=(modelo:string)=>/^claude-(?:(?:opus|sonnet|haiku|fable|mythos)-5|opus-4-8|haiku-4-5)(?:-|$)/.test(modelo);
 /** Adaptador nativo Anthropic para o contrato de ferramentas da origem.
  * Não executa ferramentas, não grava mensagens, não chama WhatsApp e não registra conteúdo.
  * Habilitação separada; falha/truncamento devem ser tratados pelo processador sem bloquear humano.
@@ -67,8 +71,13 @@ export async function responderAnthropicIA(pedido: PedidoIADireta,fetchImpl: typ
       // fornecida pelo cliente nem acesso do provedor aos buckets autenticados.
       ultima.content=[{type:'image',source:{type:'base64',media_type:i.mime,data:i.base64}},...ultima.content];
     }
+    // Modelos que pensam por padrão vêm com o pensamento desligado; o esforço só
+    // vai para quem aceita.
+    const perfil=perfilModeloIA('anthropic',pedido.modelo);
+    if(pedido.esforco!==undefined&&!ESFORCOS_IA.includes(pedido.esforco))falhar();
+    const saida={...(pedido.esquema&&garanteFormato(pedido.modelo)?{format:{type:'json_schema',schema:pedido.esquema}}:{}),...(perfil&&pedido.esforco?{effort:ESFORCO_API[pedido.esforco]}:{})};
     body=JSON.stringify({model:pedido.modelo,max_tokens:pedido.maxTokens,system:pedido.sistema,
-      messages:mensagens,...(tools?.length?{tools}: {})});
+      messages:mensagens,...(tools?.length?{tools}: {}),...(perfil?{thinking:perfil.pensamento}:{}),...(Object.keys(saida).length?{output_config:saida}:{})});
     if(Buffer.byteLength(body)>(pedido.imagem||pedido.mensagens.some(m=>m.imagem)?4*1024*1024:512*1024))falhar();
   } catch {throw new Error('IA_PEDIDO_INVALIDO');}
   return postJsonIA<RespostaIADireta>(pedido,'anthropic','https://api.anthropic.com/v1/messages',{'x-api-key':pedido.chave,'anthropic-version':'2023-06-01'},JSON.parse(body),fetchImpl,(resposta,requestId)=>{
@@ -80,6 +89,8 @@ export async function responderAnthropicIA(pedido: PedidoIADireta,fetchImpl: typ
       if(!b||typeof b!=='object'||!('type' in b))falhar();
       const bloco=b as Record<string,unknown>;
       if(bloco.type==='text'&&typeof bloco.text==='string')textos.push(bloco.text);
+      // Notas de progresso entre ferramentas (pensamento desligado) não são resposta.
+      else if(perfilModeloIA('anthropic',pedido.modelo)&&(bloco.type==='thinking'||bloco.type==='redacted_thinking'))continue;
       else if(bloco.type==='tool_use'&&typeof bloco.id==='string'&&identificador.test(bloco.id)&&!ids.has(bloco.id)&&
         typeof bloco.name==='string'&&pedido.ferramentas?.some(f=>f.function.name===bloco.name)&&
         bloco.input&&typeof bloco.input==='object'&&!Array.isArray(bloco.input)) {

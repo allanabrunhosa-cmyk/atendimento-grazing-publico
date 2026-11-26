@@ -1,4 +1,5 @@
 import 'server-only';
+import type {EsforcoIA} from './ia-modelos';
 
 export type ProvedorIA='anthropic'|'google'|'openai';
 export type ImagemIA={mime:'image/jpeg'|'image/png'|'image/webp'|'image/gif';base64:string};
@@ -8,7 +9,7 @@ export type ChamadaIA={id:string;type:'function';function:{name:string;arguments
 export type ContinuidadeIA={provedor:ProvedorIA;modelo:string;itens:Record<string,unknown>[]};
 export type MensagemIA={role:'user'|'assistant'|'tool';content:string|null;tool_calls?:ChamadaIA[];tool_call_id?:string;continuidade?:ContinuidadeIA;imagem?:ImagemIA};
 export type FerramentaIA={type:'function';function:{name:string;description:string;parameters:Record<string,unknown>}};
-export type PedidoIADireta={provedor?:ProvedorIA;chave:string;modelo:string;sistema:string;mensagens:MensagemIA[];ferramentas?:FerramentaIA[];maxTokens:number;imagem?:ImagemIA;signal?:AbortSignal};
+export type PedidoIADireta={provedor?:ProvedorIA;chave:string;modelo:string;sistema:string;mensagens:MensagemIA[];ferramentas?:FerramentaIA[];maxTokens:number;imagem?:ImagemIA;signal?:AbortSignal;/** Formato obrigatório da resposta, nos modelos que o garantem. */esquema?:Record<string,unknown>;/** Ignorado nos modelos que não aceitam. */esforco?:EsforcoIA};
 export type ConsumoIA={observado:boolean;tokensEntrada?:number;tokensSaida?:number;tokensTotal?:number;tokensCacheLeitura?:number;tokensCacheGravacao?:number;tokensRaciocinio?:number;tokensFerramentas?:number;modeloObservado?:string;respostaId?:string;requisicaoId?:string};
 export type ObservacaoConsumoIA={provedor:ProvedorIA;modelo:string;resultado:'concluida'|'truncada'|'incerta'|'recusada';consumo:ConsumoIA};
 export type RegistrarConsumoIA=(observacao:ObservacaoConsumoIA)=>Promise<void>|void;

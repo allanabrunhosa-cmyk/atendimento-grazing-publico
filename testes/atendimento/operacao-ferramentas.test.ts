@@ -72,6 +72,10 @@ describe('voz e visão, contratos nativos sem inferência real',()=>{
   expect(await criarProvedorEvidenciasDireto({chave:'fixture',modelo:'claude-sonnet-4-5',maxTokens:100},f)({sistema:'Sistema fixture',perguntaNaoConfiavel:'Pergunta fixture',fontes:[],contextoRecente:[{autor:'humano',texto:'Contexto fixture'}],imagem:{mime:'image/png',base64:'AQID'}},new AbortController().signal)).toEqual({selecoes:[],pedirApoio:true});
  });
 });
+it('mudança ou cancelamento de pedido já feito vai para a equipe; dúvida parecida não',()=>{
+ for(const p of ['Posso trocar o endereço da entrega?','Quero mudar o horário do meu pedido','Dá para alterar a data e o horário da minha entrega?','Quero cancelar meu pedido','Preciso corrigir o endereço do pedido','Mudança de endereço da encomenda'])expect(temaPergunta(p),p).toBe('excecao');
+ for(const p of ['Dá para trocar o salame por queijo?','Posso escolher o horário da entrega?','Mudou o horário de atendimento?','Dá para trocar itens da tábua antes de fazer o pedido?','Altera o valor se eu trocar o queijo?'])expect(temaPergunta(p),p).not.toBe('excecao');
+});
 it('configuração exige orçamento positivo e classificador não ignora revisão humana',()=>{
  expect(temaPergunta('Preciso de um reembolso')).toBe('excecao');expect(temaPergunta('Tenho alergia')).toBe('alergia');expect(temaPergunta('Quanto custa a tábua?')).toBe('preco');
  expect(()=>validarConfiguracaoAgente({modo:'automatico',modelo:'claude-sonnet-4-5',maxTokens:512,equipeApoio:'apoio',limites:{maxChamadas:3,custoPorChamadaCentavos:0,maxCustoCentavos:0,maxDuracaoMs:5000,timeoutChamadaMs:1000},custoCentavosDia:0,autoridadeAutomatica:false,grupoExterno:'indisponivel'})).toThrow('AGENTE_ORCAMENTO_NAO_AUTORIZADO');

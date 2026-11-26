@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Conversa de teste</title>
+<style>
+:root{--fundo:#f4f2f8;--cartao:#fff;--texto:#1f1633;--suave:#5d5470;--linha:#e2dcee;--marca:#5b21b6;--cliente:#e9dffc;--aviso:#fff4d6;--aviso-texto:#6b4a00;--erro:#fde4e4;--erro-texto:#8a1c1c}
+@media (prefers-color-scheme:dark){:root{--fundo:#15101f;--cartao:#211a30;--texto:#f1ecfb;--suave:#b7abd0;--linha:#392f4f;--marca:#a78bfa;--cliente:#3b2a63;--aviso:#3d3110;--aviso-texto:#ffdf8c;--erro:#4a1d1d;--erro-texto:#ffc2c2}}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--fundo);color:var(--texto);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column}
+header{background:var(--cartao);border-bottom:1px solid var(--linha);padding:12px 16px;display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+h1{font-size:17px;margin:0}
+header p{margin:0;font-size:13px;color:var(--suave)}
+.identidade{flex:1 1 240px;min-width:0}
+label{font-size:13px;color:var(--suave);display:flex;gap:8px;align-items:center}
+select,button,textarea{font:inherit;color:inherit;border:1px solid var(--linha);border-radius:10px;background:var(--cartao)}
+select,button{padding:8px 12px;min-height:40px}
+button{cursor:pointer}
+button.principal{background:var(--marca);border-color:var(--marca);color:#fff}
+@media (prefers-color-scheme:dark){button.principal{color:#15101f}}
+button:disabled{opacity:.55;cursor:default}
+:focus-visible{outline:2px solid var(--marca);outline-offset:2px}
+main{flex:1;overflow-y:auto;padding:16px}
+ol{list-style:none;margin:0 auto;padding:0;max-width:760px;display:flex;flex-direction:column;gap:10px}
+li{max-width:86%;padding:10px 14px;border-radius:14px;background:var(--cartao);border:1px solid var(--linha);overflow-wrap:anywhere}
+li .quem{display:block;font-size:12px;color:var(--suave);margin-bottom:2px}
+li .fala{white-space:pre-wrap;margin:0}
+li.cliente{align-self:flex-end;background:var(--cliente)}
+li.equipe{align-self:center;background:var(--aviso);color:var(--aviso-texto);text-align:center}
+li.falha{align-self:center;background:var(--erro);color:var(--erro-texto)}
+li.equipe .quem,li.falha .quem{color:inherit}
+li.digitando{color:var(--suave);font-style:italic}
+details{margin-top:8px;font-size:12px;color:var(--suave)}
+li.equipe details,li.falha details{color:inherit}
+summary{cursor:pointer}
+details p{margin:4px 0 0;white-space:pre-wrap;text-align:left}
+.faixa{margin:0 auto 12px;max-width:760px;padding:10px 14px;border-radius:12px;background:var(--aviso);color:var(--aviso-texto);font-size:14px}
+form{background:var(--cartao);border-top:1px solid var(--linha);padding:12px 16px;display:flex;gap:10px;align-items:flex-end;justify-content:center}
+textarea{flex:1;max-width:660px;padding:10px 12px;resize:none;min-height:44px;max-height:140px}
+.oculto{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <div class="identidade"><h1>Conversa de teste com a Donatella</h1><p id="sobre">Escreva como se fosse o cliente. Nada vai para o WhatsApp.</p></div>
+  <label>Modelo <select id="modelo"></select></label>
+  <p id="gasto" aria-live="polite"></p>
+  <button type="button" id="nova">Nova conversa</button>
+</header>
+<main id="area">
+  <p class="faixa" id="aviso" role="status" hidden></p>
+  <ol id="lista" aria-live="polite"></ol>
+</main>
+<form id="formulario">
+  <label class="oculto" for="texto">Mensagem do cliente</label>
+  <textarea id="texto" rows="1" maxlength="2000" placeholder="Mensagem do cliente" disabled></textarea>
+  <button class="principal" id="enviar" disabled>Enviar</button>
+</form>
+<script type="module">
+const base='/api/atendimento/operacao',cabecalho={Accept:'application/json','X-Atendimento-Ambiente':'ensaio'};
+const $=id=>document.getElementById(id),lista=$('lista'),campo=$('texto'),botao=$('enviar'),seletor=$('modelo');
+let conversaId=crypto.randomUUID(),csrf='',ligada=false,ocupado=false,modelos=[];
+const dinheiro=v=>'US$ '+v.toFixed(v<0.1?4:2).replace('.',',');
+const ERROS={FICTICIO_IA_DESLIGADA:'A IA está desligada: a chave ainda não foi guardada neste Mac.',FICTICIO_TETO_IA:'O teto de gasto deste teste foi atingido. Reinicie o painel para continuar.',FICTICIO_CONVERSA_OCUPADA:'Espere a resposta anterior.',FICTICIO_CONVERSA_LONGA:'Esta conversa ficou longa. Comece uma nova.'};
+function elemento(tag,classe,texto){const e=document.createElement(tag);if(classe)e.className=classe;if(texto!==undefined)e.textContent=texto;return e;}
+function adicionar(tipo,quem,texto,detalhes=[]){
+  const li=elemento('li',tipo);li.append(elemento('span','quem',quem),elemento('p','fala',texto));
+  if(detalhes.length){const d=elemento('details');d.append(elemento('summary','','Detalhes'));for(const t of detalhes)d.append(elemento('p','',t));li.append(d);}
+  lista.append(li);$('area').scrollTop=$('area').scrollHeight;return li;
+}
+function mostrarAviso(){
+  const m=modelos.find(v=>v.id===seletor.value),texto=!ligada?ERROS.FICTICIO_IA_DESLIGADA:m?.aviso??'';
+  $('aviso').textContent=texto;$('aviso').hidden=!texto;
+}
+function atualizarGasto(gasto,teto){$('gasto').textContent=ligada?`Gasto estimado: ${dinheiro(gasto)} de ${dinheiro(teto)}`:'';}
+function liberar(){campo.disabled=botao.disabled=!ligada||ocupado;}
+async function pedir(caminho,corpo){
+  const r=await fetch(base+caminho,corpo?{method:'POST',headers:{...cabecalho,'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(corpo)}:{headers:cabecalho});
+  const v=await r.json();if(!r.ok)throw Error(v.erro??'OPERACAO_FALHOU');return v;
+}
+async function iniciar(){
+  try{
+    csrf=(await pedir('/sessao')).csrf;const e=await pedir('/ficticio/conversa');
+    ligada=e.ligada;modelos=e.modelos;$('sobre').textContent=`Escreva como se fosse o cliente. ${e.catalogoLocal?'Produtos e preços são os do arquivo local de catálogo.':'Produtos e preços são inventados.'} Nada vai para o WhatsApp.`;seletor.replaceChildren(...modelos.map(m=>{const o=elemento('option','',m.nome);o.value=m.id;return o;}));seletor.value=e.modeloPadrao;
+    atualizarGasto(e.gastoUsd,e.tetoUsd);mostrarAviso();liberar();if(ligada)campo.focus();
+  }catch{$('aviso').textContent='O painel fictício não respondeu. Confira se ele está ligado e recarregue a página.';$('aviso').hidden=false;}
+}
+async function enviar(){
+  const texto=campo.value.trim();if(!texto||ocupado||!ligada)return;
+  ocupado=true;liberar();campo.value='';adicionar('cliente','Você, como cliente',texto);
+  const espera=adicionar('digitando','Donatella','Escrevendo…');
+  try{
+    const r=await pedir('/ficticio/conversa',{conversaId,texto,modelo:seletor.value});espera.remove();
+    const detalhes=[`Assunto: ${r.tema}`,r.fontes.length?`Fontes usadas: ${r.fontes.map(f=>f.titulo).join('; ')}`:'Nenhuma fonte usada.',`Modelo: ${r.modelo}. Custo estimado: ${dinheiro(r.custoUsd)}.`,...(r.motivo?[`Motivo interno: ${r.motivo}`]:[]),...(r.original?[`Resposta original da IA, que o cliente não veria: ${r.original}`]:[])];
+    if(r.estado==='respondeu')adicionar('donatella','Donatella',r.texto,detalhes);
+    else if(r.estado==='equipe')adicionar('equipe','A Donatella chamou a equipe. O cliente não recebe mensagem.',r.texto,detalhes);
+    else adicionar('falha','Sem resposta',r.texto,detalhes);
+    atualizarGasto(r.gastoUsd,r.tetoUsd);
+  }catch(e){espera.remove();adicionar('falha','Não foi possível testar',ERROS[e.message]??'O painel fictício não respondeu. Tente de novo.');}
+  finally{ocupado=false;liberar();if(!campo.disabled)campo.focus();}
+}
+$('formulario').addEventListener('submit',e=>{e.preventDefault();enviar();});
+campo.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();enviar();}});
+seletor.addEventListener('change',mostrarAviso);
+$('nova').addEventListener('click',()=>{if(ocupado)return;conversaId=crypto.randomUUID();lista.replaceChildren();if(ligada)campo.focus();});
+iniciar();
+</script>
+</body>
+</html>

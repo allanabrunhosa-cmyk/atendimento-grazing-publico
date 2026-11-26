@@ -75,3 +75,65 @@ describe('aprendizagem supervisionada e revogação', () => {
   it('não generaliza preferência/exceção/preço nem publica dados pessoais óbvios', async () => { const c = await casoRespondido(); for (const categoria of ['preferencia', 'excecao', 'comercial_mutavel'] as const) await expect(s.sugerirConhecimento(ator, { ...sugestao(c.id), categoria })).rejects.toThrow('GENERALIZACAO_RECUSADA'); await expect(s.sugerirConhecimento(ator, { ...sugestao(c.id), resposta: 'Telefone 11999999999, contato pessoa@example.com' })).rejects.toThrow('DADOS_PESSOAIS'); });
   it('conflitos e minimização exigem decisão explícita; candidatos semelhantes deduplicam', async () => { const c = await casoRespondido(), p = { ...sugestao(c.id), conflitos: ['Procedimento divergente fictício'] }, k = await s.sugerirConhecimento(ator, p); expect((await s.sugerirConhecimento(ator, p)).id).toBe(k.id); await expect(s.revisarConhecimento(ator, { id: k.id, revisao: 1, decisao: 'aprovar', motivo: 'Sem revisão', minimizacaoRevisada: false, conflitosResolvidos: false })).rejects.toThrow('APROVACAO_RECUSADA'); expect(k.versoes[0].estado).toBe('pendente'); });
 });
+
+describe('conhecimento cadastrado no painel e busca por relevância', () => {
+  const vigencia = { vigenteDe: '2026-10-01T00:00:00.000Z', vigenteAte: '2027-10-01T00:00:00.000Z', responsavelId: 'responsavel-ficticio' };
+  const fonte = (pergunta: string, resposta: string, categoria: 'produto' | 'procedimento' | 'politica' = 'procedimento') => ({ pergunta, resposta, categoria, condicoes: '', ...vigencia });
+  async function aprovar(id: string, revisao: number) { return s.revisarConhecimento(ator, { id, revisao, decisao: 'aprovar', motivo: 'Fonte fictícia conferida', minimizacaoRevisada: true, conflitosResolvidos: true }); }
+
+  it('cadastra fonte oficial pendente sem caso; só a aprovada orienta a agente', async () => {
+    const k = await s.cadastrarConhecimento(ator, { ...fonte('Quais formas de pagamento?', 'Aceitamos cartão e Pix na loja fictícia.', 'politica'), origem: 'manual' });
+    const v = k.versoes[0];
+    expect(v).toMatchObject({ estado: 'pendente', escopo: 'oficial', fonteCasoId: 'painel:manual', pergunta: 'Quais formas de pagamento?', minimizacaoRevisada: false });
+    expect(banco.auditoria.at(-1)?.acao).toBe('conhecimento_cadastrado');
+    expect(await s.consultarConhecimentoRelevante(ator, { empresaId: ator.empresaId, tema: 'procedimento', pergunta: 'Aceita Pix?' })).toEqual([]);
+    await aprovar(k.id, k.revisao);
+    const fontes = await s.consultarConhecimentoRelevante(ator, { empresaId: ator.empresaId, tema: 'procedimento', pergunta: 'Aceita Pix?' });
+    expect(fontes.map(f => f.id)).toEqual([k.id]);
+  });
+
+  it('recusa dados pessoais, exceção generalizada, confirmação trivial e quem não pode sugerir', async () => {
+    await expect(s.cadastrarConhecimento(ator, { ...fonte('Contato', 'Fale pelo e-mail ficticio@exemplo.com.br.'), origem: 'manual' })).rejects.toThrow('CONHECIMENTO_DADOS_PESSOAIS');
+    await expect(s.cadastrarConhecimento(ator, { ...fonte('Desconto', 'Desconto fictício combinado.'), categoria: 'excecao' as never, origem: 'manual' })).rejects.toThrow('CONHECIMENTO_GENERALIZACAO_RECUSADA');
+    await expect(s.cadastrarConhecimento(ator, { ...fonte('Entrega no domingo?', 'Sim.'), origem: 'manual' })).rejects.toThrow('CONHECIMENTO_CONFIRMACAO_TRIVIAL');
+    await expect(s.cadastrarConhecimento(ator, { ...fonte('Vigência', 'Resposta fictícia.'), vigenteAte: '2026-09-01T00:00:00.000Z', origem: 'manual' })).rejects.toThrow('CONHECIMENTO_ENTRADA_INVALIDA');
+    permitidas.delete('conhecimento.sugerir');
+    await expect(s.cadastrarConhecimento(ator, { ...fonte('Retirada', 'A retirada fictícia é combinada com a equipe.'), origem: 'manual' })).rejects.toThrow('ACESSO_NEGADO');
+    expect(banco.auditoria.filter(a => a.acao === 'conhecimento_cadastrado')).toHaveLength(0);
+  });
+
+  it('importa em lote com resultado por item, sem duplicar fonte repetida', async () => {
+    const existente = await s.cadastrarConhecimento(ator, { ...fonte('Vocês têm opção vegetariana?', 'Algumas tábuas fictícias têm versão vegetariana.', 'produto'), origem: 'manual' });
+    const r = await s.importarConhecimentos(ator, { ...vigencia, itens: [
+      { pergunta: 'Como conservar a tábua?', resposta: 'Mantenha a tábua fictícia na geladeira até servir.', categoria: 'procedimento' },
+      { pergunta: 'vocês   têm opção VEGETARIANA?', resposta: 'Algumas tábuas fictícias têm versão vegetariana.', categoria: 'produto' },
+      { pergunta: 'Telefone', resposta: 'Ligue para (11) 91234-5678.', categoria: 'procedimento' },
+      { pergunta: 'Cupom', resposta: 'Cupom fictício combinado.', categoria: 'comercial_mutavel' },
+      { pergunta: 'Campo extra', resposta: 'Resposta fictícia.', categoria: 'procedimento', escopo: 'cliente' },
+      { pergunta: 'Como conservar a tábua?', resposta: 'Mantenha a tábua fictícia na geladeira até servir.', categoria: 'procedimento' },
+    ] });
+    expect(r.resultados.map(v => [v.indice, v.estado, v.codigo ?? null])).toEqual([
+      [0, 'criado', null], [1, 'existente', null], [2, 'recusado', 'CONHECIMENTO_DADOS_PESSOAIS'],
+      [3, 'recusado', 'CONHECIMENTO_GENERALIZACAO_RECUSADA'], [4, 'recusado', 'CONHECIMENTO_ENTRADA_INVALIDA'], [5, 'existente', null],
+    ]);
+    expect(r.resultados[1].id).toBe(existente.id);
+    expect(r.resultados[5].id).toBe(r.resultados[0].id);
+    expect((await s.listarConhecimentos(ator)).filter(c => c.versoes[0].fonteCasoId === 'painel:importacao')).toHaveLength(1);
+    await expect(s.importarConhecimentos(ator, { ...vigencia, itens: Array.from({ length: 26 }, (_, n) => ({ pergunta: 'Pergunta ' + n, resposta: 'Resposta fictícia ' + n, categoria: 'procedimento' })) })).rejects.toThrow('CONHECIMENTO_IMPORTACAO_INVALIDA');
+  });
+
+  it('a fonte certa chega ao modelo mesmo entre muitas do mesmo tema', async () => {
+    const assuntos = ['horário de atendimento', 'retirada no endereço', 'nota fiscal', 'pedido para empresas', 'tábua para presente', 'cartão de mensagem', 'montagem da tábua', 'validade dos produtos', 'eventos corporativos', 'antecedência do pedido', 'entrega expressa'];
+    const r = await s.importarConhecimentos(ator, { ...vigencia, itens: [
+      ...assuntos.map(a => ({ pergunta: 'Procedimento: ' + a, resposta: 'Orientação fictícia sobre ' + a + '.', categoria: 'procedimento' })),
+      { pergunta: 'Vocês parcelam no cartão?', resposta: 'Parcelamos no cartão em condições fictícias aprovadas.', categoria: 'politica' },
+    ] });
+    for (const item of r.resultados) { const k = (await s.listarConhecimentos(ator)).find(c => c.id === item.id)!; await aprovar(k.id, k.revisao); }
+    const antes = await s.consultarConhecimento(ator, { empresaId: ator.empresaId, tema: 'procedimento' });
+    expect(antes.some(f => f.pergunta === 'Vocês parcelam no cartão?')).toBe(false);
+    const fontes = await s.consultarConhecimentoRelevante(ator, { empresaId: ator.empresaId, tema: 'procedimento', pergunta: 'Oi! Vocês parcelam em quantas vezes no cartão?' });
+    expect(fontes[0].pergunta).toBe('Vocês parcelam no cartão?');
+    expect(fontes).toHaveLength(10);
+    await expect(s.consultarConhecimentoRelevante(ator, { empresaId: ator.empresaId, tema: 'procedimento', pergunta: 'Parcelam?', limite: 51 })).rejects.toThrow('DUVIDAS_ENTRADA_INVALIDA');
+  });
+});

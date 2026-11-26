@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "vite --config apps/atendimento-chat-consulta/vite.config.mts --mode operacao",
+    "dev:ficticio": "vite --config apps/atendimento-chat-consulta/vite.config.mts --mode ficticio",
     "build": "node scripts/atendimento/compilar-operacao.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

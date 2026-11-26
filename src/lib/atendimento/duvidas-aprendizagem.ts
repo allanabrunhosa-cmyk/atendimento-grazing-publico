@@ -1,5 +1,6 @@
 import 'server-only';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
+import { ordenarPorRelevancia } from './conhecimento-relevancia';
 
 /** Transporte independente: nenhuma chamada externa, grant ou promoção de IA.
  * O adapter HUB deve revalidar sessão/permissão e bloquear sua revisão na MESMA
@@ -46,7 +47,7 @@ function id(s: string) { if (!identificador.test(s)) falha('DUVIDAS_ID_INVALIDO'
 function idMensagem(s: string) { if (typeof s !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:@/+=-]{0,511}$/.test(s)) falha('DUVIDAS_MENSAGEM_ID_INVALIDO'); }
 function numero(n: number) { if (!Number.isSafeInteger(n) || n < 0) falha('DUVIDAS_VERSAO_INVALIDA'); }
 function data(s: string) { if (typeof s !== 'string' || s.length > 40 || !/^\d{4}-\d{2}-\d{2}T/.test(s) || !Number.isFinite(Date.parse(s))) falha('DUVIDAS_DATA_INVALIDA'); }
-function possuiDadosPessoais(s: string) { return /[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?:\+?55\s*)?\(?\d{2}\)?[\s.-]*\d{4,5}[\s.-]*\d{4}|\d{3}\.?\d{3}\.?\d{3}-?\d{2}/.test(s); }
+export function possuiDadosPessoais(s: string) { return /[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?:\+?55\s*)?\(?\d{2}\)?[\s.-]*\d{4,5}[\s.-]*\d{4}|\d{3}\.?\d{3}\.?\d{3}-?\d{2}/.test(s); }
 export function extrairCorrelacaoDuvida(s: string): { codigo: string; resposta: string } | null {
   texto(s, 8000, true);
   const encontrados = [...s.matchAll(/#\s*DNT\s*-\s*([A-Z2-9]{6})\b/gi)];
@@ -230,5 +231,70 @@ export class ServicoDuvidas {
   async revisarConhecimento(ator: AtorDuvidas, p: { id: string; revisao: number; decisao: 'aprovar' | 'rejeitar'; motivo: string; minimizacaoRevisada: boolean; conflitosResolvidos: boolean }) { texto(p.motivo, 1000); return this.d.repositorio.transacao(ator.empresaId, async tx => { const c = await tx.obter<CandidatoConhecimento>('candidatos', p.id); if (!c) falha('CONHECIMENTO_AUSENTE'); const v = c.versoes.at(-1)!; await this.autorizado(tx, ator, 'conhecimento.aprovar', { empresaId: c.empresaId, clienteId: v.clienteId, conversaId: v.conversaId }); if (c.revisao !== p.revisao || v.estado !== 'pendente' || !['aprovar', 'rejeitar'].includes(p.decisao)) falha('CONHECIMENTO_REVISAO_CONFLITANTE'); if (p.decisao === 'aprovar' && (!p.minimizacaoRevisada || (!p.conflitosResolvidos && v.conflitos.length) || v.vigenteAte <= this.agora() || v.categoria === 'comercial_mutavel' || (v.categoria === 'seguranca_alimentar' && v.escopo !== 'oficial'))) falha('CONHECIMENTO_APROVACAO_RECUSADA'); v.estado = p.decisao === 'aprovar' ? 'aprovado' : 'rejeitado'; v.minimizacaoRevisada = p.minimizacaoRevisada; v.aprovadorId = ator.id; v.revisadaEm = this.agora(); v.motivoRevisao = p.motivo; c.revisao++; await tx.salvar('candidatos', c); await tx.epoca(true); await this.auditoria(tx, ator, c.id, 'conhecimento_' + v.estado, c.revisao); return c; }); }
   async substituirConhecimento(ator: AtorDuvidas, p: { id: string; revisao: number; resposta: string; motivo: string; vigenteAte: string }) { texto(p.resposta, 6000); texto(p.motivo, 1000); data(p.vigenteAte); p = { ...p, vigenteAte: new Date(p.vigenteAte).toISOString() }; return this.d.repositorio.transacao(ator.empresaId, async tx => { const c = await tx.obter<CandidatoConhecimento>('candidatos', p.id); if (!c) falha('CONHECIMENTO_AUSENTE'); const anterior = c.versoes.at(-1)!; await this.autorizado(tx, ator, 'conhecimento.aprovar', { empresaId: c.empresaId, clienteId: anterior.clienteId, conversaId: anterior.conversaId }); if (c.revisao !== p.revisao || p.vigenteAte <= this.agora()) falha('CONHECIMENTO_REVISAO_CONFLITANTE'); if (anterior.escopo === 'oficial' && possuiDadosPessoais(p.resposta)) falha('CONHECIMENTO_DADOS_PESSOAIS'); anterior.estado = 'substituido'; anterior.motivoRevisao = p.motivo; anterior.revisadaEm = this.agora(); c.versoes.push({ ...anterior, versao: anterior.versao + 1, resposta: p.resposta, vigenteDe: this.agora(), vigenteAte: p.vigenteAte, estado: 'pendente', criadaEm: this.agora(), autorId: ator.id, aprovadorId: undefined, revisadaEm: undefined, motivoRevisao: undefined, minimizacaoRevisada: false }); c.revisao++; await tx.salvar('candidatos', c); await tx.epoca(true); await this.auditoria(tx, ator, c.id, 'conhecimento_substituido', c.revisao); return c; }); }
   async revogarConhecimento(ator: AtorDuvidas, p: { id: string; revisao: number; motivo: string }) { texto(p.motivo, 1000); return this.d.repositorio.transacao(ator.empresaId, async tx => { const c = await tx.obter<CandidatoConhecimento>('candidatos', p.id); if (!c) falha('CONHECIMENTO_AUSENTE'); const v = c.versoes.at(-1)!; await this.autorizado(tx, ator, 'conhecimento.revogar', { empresaId: c.empresaId, clienteId: v.clienteId, conversaId: v.conversaId }); if (c.revisao !== p.revisao) falha('CONHECIMENTO_REVISAO_CONFLITANTE'); v.estado = 'expirado'; v.revisadaEm = this.agora(); v.motivoRevisao = p.motivo; c.revisao++; await tx.salvar('candidatos', c); await tx.epoca(true); await this.auditoria(tx, ator, c.id, 'conhecimento_revogado', c.revisao); return c; }); }
-  async consultarConhecimento(ator: AtorDuvidas, p: { empresaId: string; tema: string; clienteId?: string; conversaId?: string }): Promise<FonteConhecimento[]> { id(p.empresaId); texto(p.tema, 200); if (p.clienteId) id(p.clienteId); if (p.conversaId) id(p.conversaId); return this.d.repositorio.transacao(p.empresaId, async tx => { await this.autorizado(tx, ator, 'conhecimento.visualizar', p); const em = this.agora(), epoca = await tx.epoca(), fontes: FonteConhecimento[] = []; for (const c of await tx.listar<CandidatoConhecimento>('candidatos')) { const v = c.versoes.at(-1)!; if (v.estado !== 'aprovado' || !v.minimizacaoRevisada || v.vigenteDe > em || v.vigenteAte <= em || v.escopo === 'candidato' || v.categoria === 'comercial_mutavel' || (v.escopo === 'cliente' && v.clienteId !== p.clienteId) || (v.escopo === 'conversa' && v.conversaId !== p.conversaId) || !normalizar(v.pergunta + ' ' + v.resposta + ' ' + v.categoria).includes(normalizar(p.tema))) continue; if (!await this.d.autorizar(tx, ator, 'conhecimento.visualizar', { empresaId: c.empresaId, clienteId: v.clienteId, conversaId: v.conversaId })) continue; fontes.push({ id: c.id, versao: v.versao, pergunta: v.pergunta, conteudo: v.resposta, categoria: v.categoria, escopo: v.escopo, condicoes: v.condicoes, vigenteAte: v.vigenteAte, fonteCasoId: v.fonteCasoId, responsavelId: v.responsavelId, epoca }); } return fontes; }); }
+  async consultarConhecimento(ator: AtorDuvidas, p: { empresaId: string; tema: string; clienteId?: string; conversaId?: string }): Promise<FonteConhecimento[]> { texto(p.tema, 200); return this.fontesVigentes(ator, p, f => normalizar(f.pergunta + ' ' + f.conteudo + ' ' + f.categoria).includes(normalizar(p.tema))); }
+  /** Mesmas regras de aprovação, vigência e escopo de consultarConhecimento.
+   * Ordena pela pergunta do cliente. Fontes sem termo em comum completam a
+   * lista até o limite, primeiro as do tema. */
+  async consultarConhecimentoRelevante(ator: AtorDuvidas, p: { empresaId: string; tema: string; pergunta: string; clienteId?: string; conversaId?: string; limite?: number }): Promise<FonteConhecimento[]> {
+    texto(p.tema, 200); texto(p.pergunta, 4000);
+    const limite = p.limite ?? 10; if (!Number.isSafeInteger(limite) || limite < 1 || limite > 50) falha('DUVIDAS_ENTRADA_INVALIDA');
+    const tema = normalizar(p.tema), vigentes = await this.fontesVigentes(ator, p, () => true);
+    return ordenarPorRelevancia(p.pergunta, vigentes, limite, f => normalizar(f.pergunta + ' ' + f.conteudo + ' ' + f.categoria).includes(tema));
+  }
+  /** Fonte oficial registrada direto no painel, sem caso de origem. Entra
+   * pendente e segue a mesma revisão humana das propostas vindas de casos. */
+  async cadastrarConhecimento(ator: AtorDuvidas, p: EntradaConhecimentoOficial & { origem: 'manual' | 'importacao' }): Promise<CandidatoConhecimento> {
+    if (!['manual', 'importacao'].includes(p.origem)) falha('CONHECIMENTO_ENTRADA_INVALIDA');
+    const entrada = validarConhecimentoOficial(p);
+    return this.d.repositorio.transacao(ator.empresaId, async tx => {
+      await this.autorizado(tx, ator, 'conhecimento.sugerir', { empresaId: ator.empresaId });
+      return (await this.registrarConhecimentoOficialTx(tx, ator, entrada, p.origem)).candidato;
+    });
+  }
+  /** Importação em lote: cada item é validado sozinho e recebe seu resultado.
+   * Itens válidos entram pendentes numa única transação; repetidos não duplicam. */
+  async importarConhecimentos(ator: AtorDuvidas, p: { itens: unknown[]; vigenteDe: string; vigenteAte: string; responsavelId: string }): Promise<{ resultados: ResultadoImportacaoConhecimento[] }> {
+    if (!Array.isArray(p.itens) || !p.itens.length || p.itens.length > LIMITE_IMPORTACAO_CONHECIMENTO) falha('CONHECIMENTO_IMPORTACAO_INVALIDA');
+    const preparados = p.itens.map((item, indice) => {
+      try {
+        if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(k => !['pergunta', 'resposta', 'categoria', 'condicoes'].includes(k))) falha('CONHECIMENTO_ENTRADA_INVALIDA');
+        const v = item as Partial<EntradaConhecimentoOficial>;
+        return { indice, entrada: validarConhecimentoOficial({ pergunta: v.pergunta as string, resposta: v.resposta as string, categoria: v.categoria as EntradaConhecimentoOficial['categoria'], condicoes: v.condicoes ?? '', vigenteDe: p.vigenteDe, vigenteAte: p.vigenteAte, responsavelId: p.responsavelId }) };
+      } catch (e) { return { indice, codigo: e instanceof Error && /^[A-Z0-9_]{1,80}$/.test(e.message) ? e.message : 'CONHECIMENTO_ENTRADA_INVALIDA' }; }
+    });
+    return this.d.repositorio.transacao(ator.empresaId, async tx => {
+      await this.autorizado(tx, ator, 'conhecimento.sugerir', { empresaId: ator.empresaId });
+      const resultados: ResultadoImportacaoConhecimento[] = [];
+      for (const r of preparados) {
+        if (!('entrada' in r) || !r.entrada) { resultados.push({ indice: r.indice, estado: 'recusado', codigo: (r as { codigo: string }).codigo }); continue; }
+        const { candidato, novo } = await this.registrarConhecimentoOficialTx(tx, ator, r.entrada, 'importacao');
+        resultados.push({ indice: r.indice, estado: novo ? 'criado' : 'existente', id: candidato.id });
+      }
+      return { resultados };
+    });
+  }
+  private async registrarConhecimentoOficialTx(tx: TransacaoDuvidas, ator: AtorDuvidas, p: EntradaConhecimentoOficial, origem: 'manual' | 'importacao'): Promise<{ candidato: CandidatoConhecimento; novo: boolean }> {
+    // Mesma impressão digital das propostas de casos: a mesma fonte não duplica.
+    const fingerprint = hash([ator.empresaId, 'oficial', null, null, normalizar(p.pergunta), normalizar(p.resposta)]);
+    const anterior = await tx.buscar<CandidatoConhecimento>('candidatos', 'fingerprint', fingerprint); if (anterior) return { candidato: anterior, novo: false };
+    const v: VersaoConhecimento = { versao: 1, estado: 'pendente', pergunta: p.pergunta, resposta: p.resposta, categoria: p.categoria, escopo: 'oficial', condicoes: p.condicoes, vigenteDe: p.vigenteDe, vigenteAte: p.vigenteAte, autorId: ator.id, criadaEm: this.agora(), fonteCasoId: 'painel:' + origem, conflitos: [], minimizacaoRevisada: false, responsavelId: p.responsavelId };
+    const candidato: CandidatoConhecimento = { id: randomUUID(), empresaId: ator.empresaId, fingerprint, revisao: 1, versoes: [v] };
+    await tx.salvar('candidatos', candidato); await this.auditoria(tx, ator, candidato.id, 'conhecimento_cadastrado', 1);
+    return { candidato, novo: true };
+  }
+  private async fontesVigentes(ator: AtorDuvidas, p: { empresaId: string; clienteId?: string; conversaId?: string }, aceitar: (f: FonteConhecimento) => boolean): Promise<FonteConhecimento[]> { id(p.empresaId); if (p.clienteId) id(p.clienteId); if (p.conversaId) id(p.conversaId); return this.d.repositorio.transacao(p.empresaId, async tx => { await this.autorizado(tx, ator, 'conhecimento.visualizar', p); const em = this.agora(), epoca = await tx.epoca(), fontes: FonteConhecimento[] = []; for (const c of await tx.listar<CandidatoConhecimento>('candidatos')) { const v = c.versoes.at(-1)!; if (v.estado !== 'aprovado' || !v.minimizacaoRevisada || v.vigenteDe > em || v.vigenteAte <= em || v.escopo === 'candidato' || v.categoria === 'comercial_mutavel' || (v.escopo === 'cliente' && v.clienteId !== p.clienteId) || (v.escopo === 'conversa' && v.conversaId !== p.conversaId)) continue; const fonte: FonteConhecimento = { id: c.id, versao: v.versao, pergunta: v.pergunta, conteudo: v.resposta, categoria: v.categoria, escopo: v.escopo, condicoes: v.condicoes, vigenteAte: v.vigenteAte, fonteCasoId: v.fonteCasoId, responsavelId: v.responsavelId, epoca }; if (!aceitar(fonte)) continue; if (!await this.d.autorizar(tx, ator, 'conhecimento.visualizar', { empresaId: c.empresaId, clienteId: v.clienteId, conversaId: v.conversaId })) continue; fontes.push(fonte); } return fontes; }); }
+}
+
+export const LIMITE_IMPORTACAO_CONHECIMENTO = 25;
+export type EntradaConhecimentoOficial = { pergunta: string; resposta: string; categoria: 'produto' | 'procedimento' | 'politica' | 'seguranca_alimentar'; condicoes: string; vigenteDe: string; vigenteAte: string; responsavelId: string };
+export type ResultadoImportacaoConhecimento = { indice: number; estado: 'criado' | 'existente' | 'recusado'; id?: string; codigo?: string };
+function validarConhecimentoOficial(p: EntradaConhecimentoOficial): EntradaConhecimentoOficial {
+  texto(p.pergunta, 2000); texto(p.resposta, 6000); texto(p.condicoes, 2000, true); data(p.vigenteDe); data(p.vigenteAte); id(p.responsavelId);
+  if (Date.parse(p.vigenteAte) <= Date.parse(p.vigenteDe)) falha('CONHECIMENTO_ENTRADA_INVALIDA');
+  // Preferência, exceção e condição comercial mutável nunca viram regra oficial.
+  if (['preferencia', 'excecao', 'comercial_mutavel'].includes(p.categoria)) falha('CONHECIMENTO_GENERALIZACAO_RECUSADA');
+  if (!['produto', 'procedimento', 'politica', 'seguranca_alimentar'].includes(p.categoria)) falha('CONHECIMENTO_ENTRADA_INVALIDA');
+  if (/^(sim|não|nao|ok|certo|confirmado|pode)[.!]?$/i.test(p.resposta.trim())) falha('CONHECIMENTO_CONFIRMACAO_TRIVIAL');
+  if (possuiDadosPessoais(p.pergunta + ' ' + p.resposta + ' ' + p.condicoes)) falha('CONHECIMENTO_DADOS_PESSOAIS');
+  return { pergunta: p.pergunta.trim().replace(/\s+/g, ' '), resposta: p.resposta.trim(), categoria: p.categoria, condicoes: p.condicoes.trim(), vigenteDe: new Date(p.vigenteDe).toISOString(), vigenteAte: new Date(p.vigenteAte).toISOString(), responsavelId: p.responsavelId };
 }

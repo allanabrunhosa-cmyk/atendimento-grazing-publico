@@ -14,7 +14,7 @@ function campos(p:Record<string,unknown>|undefined,aceitos:string[]) {if(!p||Obj
 export function criarExtensaoAgenteOperacional(agente:ServicoAgenteOperacional,empresaId:string) {
  return async(req:IncomingMessage,res:ServerResponse,i:IdentidadeOperacao,p?:Record<string,unknown>)=>{
   const path=new URL(req.url??'/', 'https://atendimento.grazinghub.com.br').pathname.slice(prefixo.length),metodo=req.method??'GET',somente=['GET','HEAD'].includes(metodo);
-  if(!['/agente','/agente/configurar','/agente/controle','/agente/reconciliar','/agente/testar','/agente/opcoes','/agente/skills','/agente/skills/configurar','/agente/tom','/agente/tom/configurar','/agente/followup','/agente/followup/configurar','/duvidas','/duvidas/responder','/duvidas/assumir','/duvidas/preparar','/duvidas/enfileirar','/duvidas/encerrar','/conhecimento','/conhecimento/sugerir','/conhecimento/revisar','/conhecimento/revogar','/conhecimento/substituir'].includes(path))return false;
+  if(!['/agente','/agente/configurar','/agente/controle','/agente/reconciliar','/agente/testar','/agente/opcoes','/agente/skills','/agente/skills/configurar','/agente/tom','/agente/tom/configurar','/agente/followup','/agente/followup/configurar','/agente/entrega','/agente/entrega/configurar','/agente/prompt','/agente/prompt/configurar','/duvidas','/duvidas/responder','/duvidas/assumir','/duvidas/preparar','/duvidas/enfileirar','/duvidas/encerrar','/conhecimento','/conhecimento/sugerir','/conhecimento/revisar','/conhecimento/revogar','/conhecimento/substituir','/conhecimento/cadastrar','/conhecimento/importar'].includes(path))return false;
   const core=agente.duvidas(i),ator={id:i.id,empresaId,versaoSessao:i.sessaoVersao};let resultado:unknown;
   if(path==='/agente'&&somente)resultado=await agente.estado(i);
   else if(path==='/agente/controle'&&metodo==='POST'){const dados=campos(p,['acao','versao','idempotencia']);resultado=await agente.controlar(i,dados as {acao:'ligar'|'pausar';versao:number;idempotencia:string});}
@@ -27,6 +27,10 @@ export function criarExtensaoAgenteOperacional(agente:ServicoAgenteOperacional,e
   else if(path==='/agente/tom/configurar'&&metodo==='POST'){const dados=campos(p,['conteudo','versao','idempotencia']);resultado=await agente.configurarTom(i,dados as {conteudo:TomAgente;versao:number;idempotencia:string});}
   else if(path==='/agente/followup'&&somente)resultado=await agente.followup(i);
   else if(path==='/agente/followup/configurar'&&metodo==='POST'){const dados=campos(p,['conteudo','versao','idempotencia']);resultado=await agente.configurarFollowup(i,dados as {conteudo:ConfiguracaoFollowup;versao:number;idempotencia:string});}
+  else if(path==='/agente/entrega'&&somente)resultado=await agente.entrega(i);
+  else if(path==='/agente/entrega/configurar'&&metodo==='POST'){const dados=campos(p,['texto','aprovada','versao','idempotencia']);resultado=await agente.configurarEntrega(i,dados as {texto:string;aprovada:boolean;versao:number;idempotencia:string});}
+  else if(path==='/agente/prompt'&&somente)resultado=await agente.promptCentral(i);
+  else if(path==='/agente/prompt/configurar'&&metodo==='POST'){const dados=campos(p,['texto','versao','idempotencia']);resultado=await agente.configurarPromptCentral(i,dados as {texto:string;versao:number;idempotencia:string});}
   else if(path==='/agente/configurar'&&metodo==='POST') {const dados=campos(p,['conteudo','versao','idempotencia']);resultado=await agente.configurar(i,dados as {conteudo:ConfiguracaoAgente;versao:number;idempotencia:string});}
   else if(path==='/duvidas'&&somente)resultado={casos:await core.listarCasos(ator)};
   else if(path==='/conhecimento'&&somente)resultado={candidatos:await core.listarConhecimentos(ator)};
@@ -39,6 +43,8 @@ export function criarExtensaoAgenteOperacional(agente:ServicoAgenteOperacional,e
   else if(path==='/conhecimento/revisar'&&metodo==='POST')resultado=await core.revisarConhecimento(ator,campos(p,['id','revisao','decisao','motivo','minimizacaoRevisada','conflitosResolvidos']) as Parameters<ServicoDuvidas['revisarConhecimento']>[1]);
   else if(path==='/conhecimento/revogar'&&metodo==='POST')resultado=await core.revogarConhecimento(ator,campos(p,['id','revisao','motivo']) as Parameters<ServicoDuvidas['revogarConhecimento']>[1]);
   else if(path==='/conhecimento/substituir'&&metodo==='POST')resultado=await core.substituirConhecimento(ator,campos(p,['id','revisao','resposta','motivo','vigenteAte']) as Parameters<ServicoDuvidas['substituirConhecimento']>[1]);
+  else if(path==='/conhecimento/cadastrar'&&metodo==='POST')resultado=await core.cadastrarConhecimento(ator,{...campos(p,['pergunta','resposta','categoria','condicoes','vigenteDe','vigenteAte','responsavelId']),origem:'manual'} as Parameters<ServicoDuvidas['cadastrarConhecimento']>[1]);
+  else if(path==='/conhecimento/importar'&&metodo==='POST')resultado=await core.importarConhecimentos(ator,campos(p,['itens','vigenteDe','vigenteAte','responsavelId']) as Parameters<ServicoDuvidas['importarConhecimentos']>[1]);
   else {res.writeHead(405,{'Content-Type':'application/json'});res.end(JSON.stringify({erro:'METODO_RECUSADO'}));return true;}
   enviar(res,resultado,metodo==='HEAD');return true;
  };

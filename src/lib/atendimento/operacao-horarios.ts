@@ -1,6 +1,12 @@
 export type FaixaHorarioAgente={aberto:boolean;inicio:string|null;fim:string|null};
 export type HorariosAgente={timezone:string;inicio:string;fim:string;dias:number[];equipes:{equipeId:string;dia:number;aberto:boolean;inicio:string|null;fim:string|null}[];feriados:{equipeId:string|null;data:string;aberto:boolean;inicio:string|null;fim:string|null}[];respostaForaHorario:string;cooldownMinutos:number};
 const hora=/^([01]\d|2[0-3]):[0-5]\d$/;
+/** "24 horas, todos os dias" no painel. O formato HH:MM não tem 24:00, então
+ * 00:00–23:59 nos 7 dias vale o dia inteiro, sem o minuto final fechado. */
+export const HORARIO_INTEGRAL_AGENTE={inicio:'00:00',fim:'23:59',dias:[0,1,2,3,4,5,6]} as const;
+export function horarioIntegralAgente(h:{inicio:string;fim:string;dias:readonly number[]}){
+ return h.inicio===HORARIO_INTEGRAL_AGENTE.inicio&&h.fim===HORARIO_INTEGRAL_AGENTE.fim&&HORARIO_INTEGRAL_AGENTE.dias.every(d=>h.dias.includes(d));
+}
 const wk:Record<string,number>={Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6};
 /** Mesma precedência da origem: feriado da equipe/global, dia da equipe,
  * fallback global. Não restringe atendimento humano nem a janela da Meta. */
@@ -10,6 +16,8 @@ export function conferirHorarioAgente(c:HorariosAgente,equipeId:string|null,agor
  const p=(tipo:string)=>partes.find(v=>v.type===tipo)?.value??'';
  const data=`${p('year')}-${p('month')}-${p('day')}`,dia=wk[p('weekday')],hhmm=`${p('hour')}:${p('minute')}`;
  if(dia===undefined||!hora.test(c.inicio)||!hora.test(c.fim)||c.inicio>=c.fim||!Array.isArray(c.dias)||c.dias.some(d=>!Number.isInteger(d)||d<0||d>6))return {aberto:false,proximo:'',resposta:'',valido:false};
+ // Escolha explícita de atender sempre: feriados e horários por equipe herdados não fecham a agente.
+ if(horarioIntegralAgente(c))return {aberto:true,proximo:'',resposta:'',valido:true};
  const faixa=(ymd:string,d:number):FaixaHorarioAgente=>{
   const f=c.feriados.find(v=>v.data===ymd&&v.equipeId===equipeId)||c.feriados.find(v=>v.data===ymd&&v.equipeId===null);
   if(f)return f;

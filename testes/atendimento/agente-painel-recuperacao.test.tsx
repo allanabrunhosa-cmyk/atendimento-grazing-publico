@@ -27,9 +27,9 @@ function fixture(falhas:Falhas={},usuario='ficticio',ambiente:'operacao'|'ensaio
   throw Error('Endpoint fictício não preparado: '+p);
  });
  const cliente=criarClienteOperacao(buscar,ambiente),avisar=vi.fn(),falhar=vi.fn(),alteracoes=vi.fn();
- return {buscar,cliente,avisar,alteracoes,falhas,async montar(){const sessao=await cliente.sessao(),vista=render(<PainelAgenteDonatella cliente={cliente} sessao={sessao} falhar={falhar} avisar={avisar} alteracoes={alteracoes}/>);await screen.findByRole('combobox',{name:'Modelo da agente'});return vista;},estado:()=>({ligada,versao,modelo})};
+ return {buscar,cliente,avisar,alteracoes,falhas,async montar(){const sessao=await cliente.sessao(),vista=render(<PainelAgenteDonatella cliente={cliente} sessao={sessao} falhar={falhar} avisar={avisar} alteracoes={alteracoes}/>);await screen.findByRole('button',{name:'Provedor e modelo da agente'});return vista;},estado:()=>({ligada,versao,modelo})};
 }
-async function editarModelo(){fireEvent.click(screen.getByRole('combobox',{name:'Modelo da agente'}));const o=await screen.findByRole('option',{name:'Outro modelo'});fireEvent.pointerDown(o,{pointerType:'mouse'});fireEvent.click(o);}
+async function editarModelo(){fireEvent.click(screen.getByRole('button',{name:'Provedor e modelo da agente'}));fireEvent.click(await screen.findByRole('radio',{name:'Outro modelo'}));}
 const escritas=(f:ReturnType<typeof fixture>,caminho:string)=>f.buscar.mock.calls.filter(([u])=>String(u).endsWith(caminho));
 afterEach(()=>{cleanup();sessionStorage.clear();vi.restoreAllMocks();});
 
@@ -54,7 +54,7 @@ it('consulta antiga atrasada não substitui a versão reconciliada após atualiz
  const f=fixture({perderResposta:true,consultaIndisponivel:true});const vista=await f.montar();await editarModelo();fireEvent.click(screen.getByRole('button',{name:'Salvar configurações'}));await screen.findByText(/Ainda não foi possível conferir esta solicitação/);vista.unmount();f.falhas.consultaIndisponivel=false;
  const original=f.buscar.getMockImplementation()!;let primeira=true,liberar:(()=>void)|undefined;
  f.buscar.mockImplementation(async(u,o)=>{const resposta=await original(u,o);if(primeira&&String(u).endsWith('/agente')){primeira=false;const antiga=await resposta.json();return await new Promise<Response>(resolve=>{liberar=()=>resolve(json({...antiga,modelo:'claude-ficticio',versao:4}));});}return resposta;});
- await f.montar();await waitFor(()=>expect(f.avisar).toHaveBeenCalled());expect(screen.getByRole('combobox',{name:'Modelo da agente'}).textContent).toContain('Outro modelo');await act(async()=>liberar!());expect(screen.getByRole('combobox',{name:'Modelo da agente'}).textContent).toContain('Outro modelo');expect(escritas(f,'/agente/configurar')).toHaveLength(1);
+ await f.montar();await waitFor(()=>expect(f.avisar).toHaveBeenCalled());expect(screen.getByRole('button',{name:'Provedor e modelo da agente'}).textContent).toContain('Outro modelo');await act(async()=>liberar!());expect(screen.getByRole('button',{name:'Provedor e modelo da agente'}).textContent).toContain('Outro modelo');expect(escritas(f,'/agente/configurar')).toHaveLength(1);
 });
 it('reconcilia Ligar e Pausar após resposta perdida e recarrega estado efetivo',async()=>{
  const f=fixture({perderResposta:true});await f.montar();fireEvent.click(screen.getByRole('button',{name:'Ligar Donatella'}));fireEvent.click(await screen.findByRole('button',{name:'Confirmar e ligar Donatella'}));const pausar=await screen.findByRole('button',{name:'Pausar Donatella'});await waitFor(()=>expect(pausar).toHaveProperty('disabled',false));expect(f.estado().ligada).toBe(true);
