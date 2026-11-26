@@ -2,12 +2,13 @@ import 'server-only';
 import type {ServicoAgenteOperacional} from './operacao-agente';
 import {validarConfiguracaoAgente,type ConfiguracaoAgente} from './repositorio-agente-pg';
 import type {IdentidadeOperacao} from './operacao-tipos';
+import {MODELOS_RESERVA_REVISADA} from './ia-modelos';
 export function configuracaoAgenteParaCorte(c:ConfiguracaoAgente,p:{habilitar:boolean;modoServidor:string;autoridade:string;enviosHabilitados:boolean;iaAutomatica:boolean;comandoExpresso:boolean}):ConfiguracaoAgente{
  if(!p.comandoExpresso)throw Error('AGENTE_CORTE_NAO_AUTORIZADO');
  // Preparar o registro PG antecede a liberação do gate privado. Essa gravação
  // não autoriza o worker a inferir/enviar enquanto o gate permanecer false.
  if(p.habilitar&&(p.modoServidor!=='operacao'||p.autoridade!=='vps'||!p.enviosHabilitados))throw Error('AGENTE_AUTORIDADE_NAO_TRANSFERIDA');
- if(p.habilitar&&((c.provedor??'anthropic')!=='anthropic'||(c.moedaOrcamento??'USD')!=='USD'||!['claude-sonnet-4-5','claude-sonnet-4-5-20250929'].includes(c.modelo)||c.maxTokens>512))throw Error('AGENTE_RESERVA_MODELO_REQUER_REVISAO');
+ if(p.habilitar&&((c.provedor??'anthropic')!=='anthropic'||(c.moedaOrcamento??'USD')!=='USD'||!MODELOS_RESERVA_REVISADA.includes(c.modelo)||c.maxTokens>512))throw Error('AGENTE_RESERVA_MODELO_REQUER_REVISAO');
  // Preparação futura autorizada: reserva conservadora, em centavos USD, para
  // o payload textual de 64 KiB e saída de até 512 tokens. Não muda o teto
  // privado nem promete faturamento máximo (voz/plano exigem controle externo).

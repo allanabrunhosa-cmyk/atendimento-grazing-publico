@@ -14,7 +14,7 @@ function campos(p:Record<string,unknown>|undefined,aceitos:string[]) {if(!p||Obj
 export function criarExtensaoAgenteOperacional(agente:ServicoAgenteOperacional,empresaId:string) {
  return async(req:IncomingMessage,res:ServerResponse,i:IdentidadeOperacao,p?:Record<string,unknown>)=>{
   const path=new URL(req.url??'/', 'https://atendimento.grazinghub.com.br').pathname.slice(prefixo.length),metodo=req.method??'GET',somente=['GET','HEAD'].includes(metodo);
-  if(!['/agente','/agente/configurar','/agente/controle','/agente/reconciliar','/agente/testar','/agente/opcoes','/agente/skills','/agente/skills/configurar','/agente/tom','/agente/tom/configurar','/agente/followup','/agente/followup/configurar','/agente/entrega','/agente/entrega/configurar','/duvidas','/duvidas/responder','/duvidas/assumir','/duvidas/preparar','/duvidas/enfileirar','/duvidas/encerrar','/conhecimento','/conhecimento/sugerir','/conhecimento/revisar','/conhecimento/revogar','/conhecimento/substituir','/conhecimento/cadastrar','/conhecimento/importar'].includes(path))return false;
+  if(!['/agente','/agente/configurar','/agente/controle','/agente/reconciliar','/agente/testar','/agente/opcoes','/agente/skills','/agente/skills/configurar','/agente/tom','/agente/tom/configurar','/agente/followup','/agente/followup/configurar','/agente/entrega','/agente/entrega/configurar','/agente/prompt','/agente/prompt/configurar','/duvidas','/duvidas/responder','/duvidas/assumir','/duvidas/preparar','/duvidas/enfileirar','/duvidas/encerrar','/conhecimento','/conhecimento/sugerir','/conhecimento/revisar','/conhecimento/revogar','/conhecimento/substituir','/conhecimento/cadastrar','/conhecimento/importar'].includes(path))return false;
   const core=agente.duvidas(i),ator={id:i.id,empresaId,versaoSessao:i.sessaoVersao};let resultado:unknown;
   if(path==='/agente'&&somente)resultado=await agente.estado(i);
   else if(path==='/agente/controle'&&metodo==='POST'){const dados=campos(p,['acao','versao','idempotencia']);resultado=await agente.controlar(i,dados as {acao:'ligar'|'pausar';versao:number;idempotencia:string});}
@@ -29,6 +29,8 @@ export function criarExtensaoAgenteOperacional(agente:ServicoAgenteOperacional,e
   else if(path==='/agente/followup/configurar'&&metodo==='POST'){const dados=campos(p,['conteudo','versao','idempotencia']);resultado=await agente.configurarFollowup(i,dados as {conteudo:ConfiguracaoFollowup;versao:number;idempotencia:string});}
   else if(path==='/agente/entrega'&&somente)resultado=await agente.entrega(i);
   else if(path==='/agente/entrega/configurar'&&metodo==='POST'){const dados=campos(p,['texto','aprovada','versao','idempotencia']);resultado=await agente.configurarEntrega(i,dados as {texto:string;aprovada:boolean;versao:number;idempotencia:string});}
+  else if(path==='/agente/prompt'&&somente)resultado=await agente.promptCentral(i);
+  else if(path==='/agente/prompt/configurar'&&metodo==='POST'){const dados=campos(p,['texto','versao','idempotencia']);resultado=await agente.configurarPromptCentral(i,dados as {texto:string;versao:number;idempotencia:string});}
   else if(path==='/agente/configurar'&&metodo==='POST') {const dados=campos(p,['conteudo','versao','idempotencia']);resultado=await agente.configurar(i,dados as {conteudo:ConfiguracaoAgente;versao:number;idempotencia:string});}
   else if(path==='/duvidas'&&somente)resultado={casos:await core.listarCasos(ator)};
   else if(path==='/conhecimento'&&somente)resultado={candidatos:await core.listarConhecimentos(ator)};

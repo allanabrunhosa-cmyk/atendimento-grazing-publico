@@ -92,6 +92,46 @@ describe('API fictícia do painel', () => {
     expect(await pedir('127.0.0.1', 'POST', '/conhecimento/cadastrar')).toBe(403);
   });
 
+  it('consultora de vendas: catálogo de exemplo com link, ocasião e conversa em várias linhas', async () => {
+    const { versao } = await cliente.agente();
+    const festa = await cliente.testarAgente({ pergunta: 'Quero uma tábua\nÉ para um aniversário\nSomos 10', versao, idempotencia: 'venda-1' });
+    expect(festa.estado).toBe('concluido');
+    expect(festa.texto).toContain('Assunto identificado: produto. Conversa de 3 mensagens');
+    expect(festa.texto).toContain('Quantidade entendida: 10 pessoas.');
+    expect(festa.texto).toContain('1. Mesa Exemplo para 10 — R$ 890,00 — https://loja-exemplo.invalid/produto/mesa-exemplo-10');
+    expect(festa.texto).toContain('Habilidade ativa: Consultora de vendas');
+    const vegetariana = await cliente.testarAgente({ pergunta: 'Tem tábua vegetariana para 4 pessoas?', versao, idempotencia: 'venda-2' });
+    expect(vegetariana.texto).toContain('1. Tábua Exemplo Vegetariana para 4');
+    const escolha = await cliente.testarAgente({ pergunta: 'Quero encomendar uma tábua\nA segunda', versao, idempotencia: 'venda-3' });
+    expect(escolha.texto).toContain('Assunto identificado: produto.');
+  });
+
+  it('pedido sempre pelo site: só corporativo e dificuldade no site vão para um atendente', async () => {
+    const { versao } = await cliente.agente();
+    const testar = (pergunta: string, n: number) => cliente.testarAgente({ pergunta, versao, idempotencia: `site-${n}` });
+    expect(await testar('Quero um orçamento para evento da empresa', 1)).toMatchObject({ estado: 'apoio', motivo: 'Pedido corporativo vai para um atendente.' });
+    expect(await testar('Quero algo para evento da empresa\nSão 80 pessoas', 2)).toMatchObject({ estado: 'apoio', motivo: 'A venda já está com a equipe.' });
+    expect(await testar('Quero uma tábua para 4\nNão consegui', 3)).toMatchObject({ estado: 'apoio', motivo: expect.stringContaining('não conseguiu pedir pelo site') });
+    const aqui = await testar('Quero uma tábua para 4\nPrefiro fazer por aqui mesmo', 4);
+    expect(aqui).toMatchObject({ estado: 'concluido', texto: expect.stringContaining('https://loja-exemplo.invalid/produto/tabua-exemplo-4') });
+    expect(await testar('Quero um orçamento\nAna Exemplo, tábua para 10, sábado às 19h, Moema, aniversário', 6)).toMatchObject({ estado: 'apoio', motivo: 'O cliente mandou os dados do orçamento: vai para um atendente.' });
+    const seis = await testar('Somos 6', 5);
+    expect(seis.texto).toContain('Nenhuma opção exata para o grupo: ela sugere as mais próximas.');
+    expect(seis.texto).toContain('1. Mesa Exemplo para 10');
+    expect(await testar('Quero comprar sushi', 7)).toMatchObject({ texto: expect.stringContaining('ela indicaria o site, https://loja-exemplo.invalid') });
+  });
+
+  it('grupo maior que qualquer opção: composição aprovada no conhecimento, item a item', async () => {
+    const { versao } = await cliente.agente(), pergunta = 'Como montar um pedido para festa grande?';
+    await cliente.cadastrarConhecimento({ pergunta, resposta: 'Montamos composições com tábuas, sanduíches, tortas e doces. Sugestão para 40 pessoas: 1× Mesa Exemplo Festa; 1× Mesa Exemplo para 10; 1× Mini Sanduíches Exemplo 20 un; 1× Torta Exemplo de Palmito; 2× Mini Bolos Exemplo (24un). Dá para ajustar ao gosto dos convidados.', categoria: 'produto', condicoes: '', vigenteDe: new Date(Date.now() - 60000).toISOString(), vigenteAte: new Date(Date.now() + 86400000).toISOString(), responsavelId: 'demo-usuario' });
+    const fonte = (await cliente.conhecimento()).find(v => v.versoes.at(-1)?.pergunta === pergunta)!;
+    await cliente.revisarConhecimento({ id: fonte.id, revisao: fonte.revisao, decisao: 'aprovar', motivo: 'Composição de exemplo.', minimizacaoRevisada: true, conflitosResolvidos: true });
+    const r = await cliente.testarAgente({ pergunta: 'Oi, vou fazer minha festa de aniversario para 30 pessoas e gostaria de ter alguns aperitivos. Mas não sei o que pedir', versao, idempotencia: 'composicao-1' });
+    expect(r.texto).toContain('ela sugere a composição de referência para 40 pessoas');
+    for (const item of ['1× Mesa Exemplo Festa', '1× Mesa Exemplo para 10', '1× Mini Sanduíches Exemplo 20un', '1× Torta Exemplo de Palmito', '2× Mini Bolos Exemplo 24un']) expect(r.texto, item).toContain(item);
+    expect(r.texto).toContain('https://loja-exemplo.invalid/produto/mini-bolos-exemplo');
+  });
+
   it('não faz nenhuma chamada de rede fora do servidor local', () => {
     expect(chamadas.length).toBeGreaterThan(0);
     expect(chamadas.every(u => u.startsWith(base + '/'))).toBe(true);

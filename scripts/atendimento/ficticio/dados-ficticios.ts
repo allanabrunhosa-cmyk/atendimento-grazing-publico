@@ -38,6 +38,22 @@ export function conversasFicticias(agora: Date): { conversas: ConversaFicticia[]
   };
 }
 
+/** Catálogo de exemplo no formato do HUB, com oferta da loja. Nomes, preços e
+ * links são inventados; o domínio .invalid nunca resolve. */
+export type ProdutoFicticio = { id: string; nome: string; especificacao: string; preco: string; slug: string; url?: string };
+export const SITE_FICTICIO = 'https://loja-exemplo.invalid';
+export const PRODUTOS_FICTICIOS: ProdutoFicticio[] = [
+  { id: 'demo-hub-2', nome: 'Tábua Exemplo para 2', especificacao: 'Serve 2 pessoas. Queijos, embutidos, frutas e pães de exemplo.', preco: '189.90', slug: 'tabua-exemplo-2' },
+  { id: 'demo-hub-4', nome: 'Tábua Exemplo para 4', especificacao: 'Serve 4 pessoas. Queijos, embutidos, frutas, pães e geleia de exemplo.', preco: '289.90', slug: 'tabua-exemplo-4' },
+  { id: 'demo-hub-4-veg', nome: 'Tábua Exemplo Vegetariana para 4', especificacao: 'Serve 4 pessoas. Versão vegetariana, sem embutidos: queijos, frutas, pães e antepastos de exemplo.', preco: '279.90', slug: 'tabua-exemplo-vegetariana-4' },
+  { id: 'demo-hub-10', nome: 'Mesa Exemplo para 10', especificacao: 'Serve 10 pessoas. Mesa montada para festas e aniversários, com queijos, embutidos, frutas e doces de exemplo.', preco: '890.00', slug: 'mesa-exemplo-10' },
+  { id: 'demo-hub-20', nome: 'Mesa Exemplo Festa', especificacao: 'Serve de 15 a 20 pessoas. Mesa para eventos e comemorações, com queijos, embutidos, frutas, pães e doces de exemplo.', preco: '1590.00', slug: 'mesa-exemplo-festa' },
+  { id: 'demo-hub-presente', nome: 'Caixa Presente Exemplo', especificacao: 'Serve 2 pessoas. Caixa para presentear, com cartão de mensagem, queijos, frutas e vinho de exemplo.', preco: '219.90', slug: 'caixa-presente-exemplo' },
+  { id: 'demo-hub-sanduiches', nome: 'Mini Sanduíches Exemplo 20un', especificacao: 'Caixa com 20 mini sanduíches de exemplo, embalados um a um.', preco: '180.00', slug: 'mini-sanduiches-exemplo' },
+  { id: 'demo-hub-torta', nome: 'Torta Exemplo de Palmito', especificacao: 'Torta de exemplo, para aquecer e servir.', preco: '150.00', slug: 'torta-exemplo-palmito' },
+  { id: 'demo-hub-bolos', nome: 'Mini Bolos Exemplo 24un', especificacao: 'Caixa com 24 mini bolos de exemplo.', preco: '140.00', slug: 'mini-bolos-exemplo' },
+];
+
 /** Fontes de exemplo. As cinco primeiras entram aprovadas e as duas últimas
  * ficam pendentes, para treinar a aprovação no painel. */
 export const FONTES_FICTICIAS: { pergunta: string; resposta: string; categoria: 'produto' | 'procedimento' | 'politica'; aprovada: boolean }[] = [

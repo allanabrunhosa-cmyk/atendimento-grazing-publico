@@ -1,21 +1,34 @@
 import 'server-only';
 import {MOTIVO_RESPOSTA_REDIGIDA} from './ia-resposta-fundamentada';
+import {clienteInforma,dadosDeOrcamento,estadoVenda,motivoVendaEquipe,pedidoOrcamento,VENDA_LIVRE,type EstadoVenda,type MotivoVendaEquipe} from './encaminhamento-venda';
+import {SKILL_CONSULTORA_VENDAS} from './skill-consultora-vendas';
+import {possuiDadosPessoais} from './duvidas-aprendizagem';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { contextoAtualIA, type ContextoIA, type DecisaoIA, type LimitesIA, type PendenciaApoioIA, type RepositorioIA, type TarefaIA, type TemaIA } from './ia-orquestrador';
 import type {ObservacaoConsumoIA} from './ia-provedor-tipos';
 import type {ObservacaoConsumoVoz} from './operacao-ferramentas';
+import {aceitaEsforcoIA,ESFORCOS_IA,type EsforcoIA} from './ia-modelos';
 
 export type ConfiguracaoAgente = {
  modo: 'desligado'|'rascunho'|'automatico'; provedor?: ProvedorAgente; modelo: string; maxTokens: number; equipeApoio: string;
  limites: LimitesIA; custoCentavosDia: number; autoridadeAutomatica: boolean; grupoExterno: 'indisponivel';
  moedaOrcamento?: 'USD';
+ /** Só nos modelos que aceitam; sem valor, vale o padrão do modelo. */
+ esforco?: EsforcoIA;
 };
 export type ProvedorAgente = 'anthropic'|'google'|'openai';
 export type FerramentaSkillAgente = 'search_products'|'get_order'|'delivery_conditions'|'available_slots'|'consultar_conhecimento'|'solicitar_apoio';
 export type SkillAgente = {id:string;nome:string;finalidade:string;escopo:TemaIA[];habilitada:boolean;ferramentas:FerramentaSkillAgente[];versao:number;responsavelId:string};
 export type ConfiguracaoSkillsAgente = {skills:SkillAgente[]};
 export type TomAgente = {nome:string;persona:string;formalidade:'informal'|'equilibrada'|'formal';conciso:boolean;emojis:'nenhum'|'moderado';termosPreferidos:string[];termosProibidos:string[];exemplos:string[]};
+/** Prompt central: a base de quem a Donatella é e de como ela atende e vende,
+ * escrita pela equipe. Soma-se às skills e ao tom. Não substitui as regras fixas
+ * do sistema: fatos só das fontes, formato da resposta e apoio humano. Vazio, não
+ * entra na chamada. */
+export type PromptCentralAgente = {texto:string};
+export const LIMITE_PROMPT_CENTRAL=8000;
+export const PROMPT_CENTRAL_PADRAO:PromptCentralAgente={texto:''};
 export const FERRAMENTAS_SKILLS_AGENTE:readonly FerramentaSkillAgente[]=['search_products','get_order','delivery_conditions','available_slots','consultar_conhecimento','solicitar_apoio'];
 const temas:readonly TemaIA[]=['produto','preco','estoque','frete','agenda','pedido','procedimento','alergia','excecao'];
 export const TOM_AGENTE_PADRAO:TomAgente={nome:'Donatella',persona:'Assistente cordial da Grazing Table & Co.',formalidade:'equilibrada',conciso:true,emojis:'nenhum',termosPreferidos:[],termosProibidos:[],exemplos:[]};
@@ -25,6 +38,7 @@ export const SKILLS_AGENTE_PADRAO:ConfiguracaoSkillsAgente={skills:[
  {id:'entrega',nome:'Entrega',finalidade:'Consultar condições de entrega revisadas.',escopo:['frete'],habilitada:true,ferramentas:['delivery_conditions'],versao:1,responsavelId:'service:donatella-preparacao'},
  {id:'agenda',nome:'Agenda',finalidade:'Consultar horários disponíveis sem criar compromissos.',escopo:['agenda'],habilitada:true,ferramentas:['available_slots'],versao:1,responsavelId:'service:donatella-preparacao'},
  {id:'conhecimento',nome:'Conhecimento',finalidade:'Consultar conhecimento aprovado e vigente.',escopo:['procedimento'],habilitada:true,ferramentas:['consultar_conhecimento'],versao:1,responsavelId:'service:donatella-preparacao'},
+ SKILL_CONSULTORA_VENDAS,
  {id:'apoio',nome:'Apoio humano',finalidade:'Encaminhar dúvidas e exceções à equipe humana. O encaminhamento obrigatório é uma política permanente.',escopo:[...temas],habilitada:true,ferramentas:['solicitar_apoio'],versao:1,responsavelId:'service:donatella-preparacao'},
 ]};
 const objeto=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
@@ -42,6 +56,12 @@ export function validarSkillsAgente(c:ConfiguracaoSkillsAgente){
 export function validarTomAgente(c:TomAgente){
  const erro='AGENTE_TOM_INVALIDO';campos(c,['nome','persona','formalidade','conciso','emojis','termosPreferidos','termosProibidos','exemplos'],erro);
  if(!texto(c.nome,80)||!texto(c.persona,1000,true)||!['informal','equilibrada','formal'].includes(c.formalidade)||typeof c.conciso!=='boolean'||!['nenhum','moderado'].includes(c.emojis)||!lista(c.termosPreferidos,30,v=>texto(v,80))||!lista(c.termosProibidos,30,v=>texto(v,80))||!lista(c.exemplos,10,v=>texto(v,1000,true))||JSON.stringify(c).length>8000)throw Error(erro);
+}
+export function validarPromptCentralAgente(c:PromptCentralAgente){
+ const erro='AGENTE_PROMPT_INVALIDO';campos(c,['texto'],erro);
+ if(typeof c.texto!=='string'||c.texto.length>LIMITE_PROMPT_CENTRAL||/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(c.texto)||/\b(?:sk-ant-|sk_live_|Bearer\s+\S{8,})/i.test(c.texto))throw Error(erro);
+ // Telefone, e-mail ou CPF no prompt seriam repetidos a clientes sem fonte.
+ if(possuiDadosPessoais(c.texto))throw Error('AGENTE_PROMPT_DADOS_PESSOAIS');
 }
 export function skillPermiteAgente(c:ConfiguracaoSkillsAgente,tema:TemaIA,ferramenta:FerramentaSkillAgente){
  // Solicitação humana obrigatória não depende de configuração de estilo/skill.
@@ -83,19 +103,71 @@ export const hashConfiguracaoAgente = (v:unknown)=>createHash('sha256').update(J
 export const hashTarefaAgente = (t:TarefaIA)=>hashConfiguracaoAgente(t);
 const hashTarefa=hashTarefaAgente;
 const hashId = (s: string) => { const b=createHash('sha256').update(s).digest('hex'); return `${b.slice(0,8)}-${b.slice(8,12)}-4${b.slice(13,16)}-a${b.slice(17,20)}-${b.slice(20,32)}`; };
+/** Mudar ou cancelar pedido já feito: verbo de mudança e, logo depois na mesma
+ * frase, pedido, encomenda ou entrega ("trocar o endereço da entrega", "cancelar
+ * meu pedido"). Sem esse complemento ("trocar o salame por queijo", "mudou o
+ * horário de atendimento?") a pergunta segue o caminho normal. */
+const MUDANCA_PEDIDO_FEITO = /\b(?:troc|mud|alter|corrig|cancel)[a-zà-ú]*\b[^.?!\n]{0,30}?\b(?:pedido|encomenda|entrega)\b/iu;
+/** Intenção de comprar ("como faço um pedido?", "quero encomendar"). Não é
+ * consulta a um pedido existente: vai para o catálogo e a qualificação. */
+const NOVO_PEDIDO = /\b(?:fa[zç](?:er|o|endo)?|fa[cç]o)\s+(?:o\s+|um\s+|uma\s+|meu\s+|minha\s+)?(?:pedido|encomenda)\b|\b(?:novo|nova)\s+(?:pedido|encomenda)\b|\bencomend(?:ar|o)\b|\bquero\s+(?:pedir|encomendar)\b/iu;
+/** Ocasião, número de pessoas e preferência: respostas típicas da qualificação. */
+const QUALIFICACAO_PRODUTO = /anivers|casamento|noivado|\bch[aá]\s+de\s+(?:beb[eê]|panela|revela|cozinha)|confraterniza|happy hour|comemora|\bfesta|piquenique|celebra|formatura|batizado|convidad|vegetarian|vegan|sem carne|\bsomos\s+(?:\d{1,3}|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez)\b/iu;
 export function temaPergunta(pergunta: string): TemaIA {
  if (/alerg|intoler|anafilax/i.test(pergunta)) return 'alergia';
- if (/reembol|estorno|desconto|cancelar pedido|reclama/i.test(pergunta)) return 'excecao';
+ if (/reembol|estorno|desconto|cancelar pedido|reclama/i.test(pergunta) || MUDANCA_PEDIDO_FEITO.test(pergunta)) return 'excecao';
+ // O pedido é pelo site; corporativo e quem não consegue pelo site vão para a equipe.
+ if (motivoVendaEquipe(pergunta)) return 'excecao';
+ // Orçamento: o conhecimento aprovado traz os dados que a Donatella solicita.
+ if (pedidoOrcamento(pergunta)) return 'procedimento';
+ // "Como faço um pedido?" é dúvida de procedimento (o caminho pelo site);
+ // "quero fazer um pedido" já é a compra, que segue para o catálogo.
+ if (NOVO_PEDIDO.test(pergunta)) return /\bcomo\b/iu.test(pergunta) ? 'procedimento' : 'produto';
  if (/\bpedido\b|rastre|entregue|status/i.test(pergunta)) return 'pedido';
  if (/frete|entrega|bairro|endere[cç]o|cep/i.test(pergunta)) return 'frete';
  if (/agenda|agendar|hor[aá]rio|reserva/i.test(pergunta)) return 'agenda';
  if (/pre[cç]o|custa|valor|quanto/i.test(pergunta)) return 'preco';
  if (/estoque|dispon[ií]vel|disponibilidade/i.test(pergunta)) return 'estoque';
- if (/produto|cat[aá]logo|card[aá]pio|cesta|t[aá]bua|caf[eé]|op[cç][aã]o|recomend|sugest|\blink\b|\bcomprar\b|\bpresente\b|\bpessoas?\b|\bbrie\b|\bgrazing\b/i.test(pergunta)) return 'produto';
+ if (/produto|cat[aá]logo|card[aá]pio|cesta|t[aá]bua|caf[eé]|op[cç][aã]o|recomend|sugest|\blink\b|\bcomprar\b|\bpresente\b|\bpessoas?\b|\bbrie\b|\bgrazing\b/i.test(pergunta) || QUALIFICACAO_PRODUTO.test(pergunta)) return 'produto';
  return 'procedimento';
 }
+const ENCERRAMENTO = /^\s*(?:ok|okay|obrigad[oa]|valeu|perfeito|combinado|beleza|tchau|at[eé] mais|ol[aá]|oi|bom dia|boa tarde|boa noite)\b/iu;
+const REFERENCIA_OPCOES = /\b(?:ess[ae]s?|est[ae]s?|elas?|eles?|del[ae]s|primeir[ao]|segund[ao]|terceir[ao]|[uú]ltim[ao]|diferen[cç]a|maior|menor|mais barat[ao]|mais car[ao])\b/iu;
+/** "Pode fechar pra mim?", "posso pedir por aqui?": no meio da venda, volta ao
+ * catálogo para ela reforçar o site com o link do produto. */
+const FECHAMENTO = /\b(?:fech(?:ar|a|o|amos)|compr(?:ar|o|a)|pe[cç]o|pedir|por aqui|whats\w*|zap|link)\b/iu;
+const TEMAS_VENDA: readonly TemaIA[] = ['produto','preco','estoque'];
+/** Durante uma conversa de produto, a resposta curta do cliente ("aniversário",
+ * "a segunda", "qual a diferença delas?") continua no catálogo. Pergunta nova
+ * sem referência às opções ("aceita Pix?") e despedida seguem o próprio assunto.
+ * Com a venda já na equipe, o assunto de venda e o que o cliente informa em
+ * seguida ("são 80 pessoas") também vão para ela; o mesmo vale para os dados do
+ * orçamento que ele pediu. */
+export function temaComContexto(pergunta: string, anterior: TemaIA | null, venda: EstadoVenda = VENDA_LIVRE): TemaIA {
+ const proprio = temaPergunta(pergunta);
+ if (proprio !== 'alergia' && (venda.motivo && (TEMAS_VENDA.includes(proprio) || pedidoOrcamento(pergunta) || clienteInforma(pergunta)) || venda.aguardandoOrcamento && dadosDeOrcamento(pergunta))) return 'excecao';
+ if (pedidoOrcamento(pergunta)) return proprio;
+ if (proprio !== 'procedimento' || !anterior || !TEMAS_VENDA.includes(anterior) || ENCERRAMENTO.test(pergunta)) return proprio;
+ return !pergunta.includes('?') || REFERENCIA_OPCOES.test(pergunta) || FECHAMENTO.test(pergunta) ? 'produto' : proprio;
+}
+/** Assunto e, quando a venda vai para a equipe, o motivo que ela vê no caso. */
+export function classificarNaConversa(pergunta: string, anterior: TemaIA | null, venda: EstadoVenda): { tema: TemaIA; motivoEquipe?: MotivoVendaEquipe } {
+ const tema = temaComContexto(pergunta, anterior, venda);
+ if (tema !== 'excecao') return { tema };
+ const motivo = motivoVendaEquipe(pergunta) ?? (temaPergunta(pergunta) === 'excecao' ? null : venda.motivo ?? (venda.aguardandoOrcamento ? 'ORCAMENTO' : null));
+ return motivo ? { tema, motivoEquipe: motivo } : { tema };
+}
+/** Assunto da tarefa anterior (últimas 6 horas) e situação da venda: pedido
+ * corporativo, dificuldade no site ou orçamento nas últimas 24 horas, prazo do
+ * caso de apoio, sem resposta da equipe na conversa depois disso. */
+async function classificarMensagemTx(tx: PoolClient, pergunta: string, conversaId: string, excluirId?: string) {
+ const r = await tx.query<{ tema: string | null; pergunta: string | null; recente: boolean; aberta: boolean }>(`SELECT t.tarefa->>'tema' tema,t.tarefa->>'pergunta' pergunta,t.criada_em>now()-interval '6 hours' recente,NOT EXISTS(SELECT 1 FROM atendimento_operacao.mensagem m WHERE m.conversa_id=t.conversa_id AND m.autor='humano' AND m.criada_em>t.criada_em) aberta FROM atendimento_operacao.agente_tarefa t WHERE t.conversa_id=$1 AND ($2::uuid IS NULL OR t.id<>$2::uuid) AND t.criada_em>now()-interval '24 hours' ORDER BY t.criada_em DESC,t.id DESC LIMIT 20`, [conversaId, excluirId ?? null]);
+ const tema = r.rows[0]?.recente ? r.rows[0].tema : null;
+ return classificarNaConversa(pergunta, tema && (temas as readonly string[]).includes(tema) ? tema as TemaIA : null, estadoVenda(r.rows.filter(v => v.aberta && v.pergunta).map(v => v.pergunta!).reverse()));
+}
 export function validarConfiguracaoAgente(c: ConfiguracaoAgente) {
- campos(c,['modo','provedor','modelo','maxTokens','equipeApoio','limites','custoCentavosDia','moedaOrcamento','autoridadeAutomatica','grupoExterno'],'AGENTE_CONFIGURACAO_INVALIDA');
+ campos(c,['modo','provedor','modelo','maxTokens','equipeApoio','limites','custoCentavosDia','moedaOrcamento','autoridadeAutomatica','grupoExterno','esforco'],'AGENTE_CONFIGURACAO_INVALIDA');
+ if(c.esforco!==undefined&&(!ESFORCOS_IA.includes(c.esforco)||!aceitaEsforcoIA(c.provedor,c.modelo)))throw Error('AGENTE_CONFIGURACAO_INVALIDA');
  const provedor=c.provedor??'anthropic',padraoModelo=provedor==='anthropic'?/^claude-[a-z0-9-]{1,80}$/:provedor==='google'?/^gemini-[a-z0-9.-]{1,80}$/:/^(gpt-[a-z0-9.-]{1,80}|o[1-9][a-z0-9.-]{0,80})$/;
  if (!['anthropic','google','openai'].includes(provedor)||c.moedaOrcamento!==undefined&&c.moedaOrcamento!=='USD'||!['desligado','rascunho','automatico'].includes(c.modo) || typeof c.modelo!=='string' || c.modelo.length>90 || c.modelo!==''&&!padraoModelo.test(c.modelo) || c.modo!=='desligado'&&!c.modelo || !Number.isSafeInteger(c.maxTokens)||c.maxTokens<64||c.maxTokens>2048 || !/^[A-Za-z0-9_-]{1,100}$/.test(c.equipeApoio) || !Number.isSafeInteger(c.custoCentavosDia)||c.custoCentavosDia<0||c.custoCentavosDia>100000 || typeof c.autoridadeAutomatica!=='boolean'||c.grupoExterno!=='indisponivel')throw Error('AGENTE_CONFIGURACAO_INVALIDA');
  const l=c.limites;
@@ -114,7 +186,7 @@ export async function programarMensagemAgenteTx(tx: PoolClient, p: {empresaId:st
  // O histórico mantém o conteúdo integral. Texto além do limite do modelo
  // exige apoio humano, sem impedir o commit da recepção nem inferir um recorte.
  const extensa=p.conteudo.length>4000||['document','video','unsupported'].includes(p.tipo);
- const tarefa:TarefaIA={id:hashId(`agente:${p.empresaId}:${p.mensagemId}`),atorId:'service:donatella-ia',empresaId:p.empresaId,conversaId:p.conversaId,clienteId:v.contato_id,versao:p.versao,mensagemOrigemId:p.mensagemId,pergunta:p.conteudo.trim().slice(0,4000)||'O cliente enviou uma mídia. Confira o conteúdo preservado.',tema:extensa?'excecao':temaPergunta(p.conteudo),...(['image','audio'].includes(p.tipo)?{midia:{tipo:p.tipo==='image'?'imagem' as const:'audio' as const,preservada:false}}:{})};
+ const tarefa:TarefaIA={id:hashId(`agente:${p.empresaId}:${p.mensagemId}`),atorId:'service:donatella-ia',empresaId:p.empresaId,conversaId:p.conversaId,clienteId:v.contato_id,versao:p.versao,mensagemOrigemId:p.mensagemId,pergunta:p.conteudo.trim().slice(0,4000)||'O cliente enviou uma mídia. Confira o conteúdo preservado.',...(extensa?{tema:'excecao' as const}:await classificarMensagemTx(tx,p.conteudo,p.conversaId)),...(['image','audio'].includes(p.tipo)?{midia:{tipo:p.tipo==='image'?'imagem' as const:'audio' as const,preservada:false}}:{})};
  await tx.query(`INSERT INTO atendimento_operacao.agente_tarefa(id,empresa_id,conversa_id,mensagem_id,versao_conversa,tarefa,hash,configuracao_versao) SELECT $1,$2,$3,$4,$5,$6::jsonb,$7,versao FROM atendimento_operacao.configuracao WHERE chave='agente' ON CONFLICT(mensagem_id) DO NOTHING`,[tarefa.id,p.empresaId,p.conversaId,p.mensagemId,p.versao,JSON.stringify(tarefa),hashTarefa(tarefa)]);
  return {agendada:true,tarefaId:tarefa.id} as const;
 }
@@ -124,9 +196,9 @@ export class RepositorioAgentePg implements RepositorioIA {
  private async tx<T>(executar:(tx:PoolClient)=>Promise<T>) {
   const c=await this.pool.connect();try {await c.query('BEGIN');await c.query("SET LOCAL lock_timeout='2s';SET LOCAL statement_timeout='5s'"); const b=await c.query<{nome:string}>('SELECT current_database() nome');if(!['donatella_operacao','donatella_ensaio_operacao'].includes(b.rows[0]?.nome))throw Error('DESTINO_AGENTE_RECUSADO');const r=await executar(c);await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK').catch(()=>undefined);throw e;}finally{c.release();}
  }
- async configuracao():Promise<{configuracao:ConfiguracaoAgente;versao:number;skills:ConfiguracaoSkillsAgente;tom:TomAgente}> {return this.tx(async tx=>{
-  const r=await tx.query<{conteudo:ConfiguracaoAgente;versao:string;skills:ConfiguracaoSkillsAgente;tom:TomAgente}>(`SELECT a.conteudo,a.versao,s.conteudo skills,t.conteudo tom FROM atendimento_operacao.configuracao a LEFT JOIN atendimento_operacao.configuracao s ON s.chave='agente_skills' LEFT JOIN atendimento_operacao.configuracao t ON t.chave='agente_tom' WHERE a.chave='agente'`);const c=r.rows[0];if(!c)throw Error('AGENTE_CONFIGURACAO_AUSENTE');
-  const skills=c.skills??SKILLS_AGENTE_PADRAO,tom=c.tom??TOM_AGENTE_PADRAO;validarConfiguracaoAgente(c.conteudo);validarSkillsAgente(skills);validarTomAgente(tom);return {configuracao:normalizarConfiguracaoAgente(c.conteudo),versao:Number(c.versao),skills,tom};
+ async configuracao():Promise<{configuracao:ConfiguracaoAgente;versao:number;skills:ConfiguracaoSkillsAgente;tom:TomAgente;prompt:PromptCentralAgente}> {return this.tx(async tx=>{
+  const r=await tx.query<{conteudo:ConfiguracaoAgente;versao:string;skills:ConfiguracaoSkillsAgente;tom:TomAgente;prompt:PromptCentralAgente|null}>(`SELECT a.conteudo,a.versao,s.conteudo skills,t.conteudo tom,p.conteudo prompt FROM atendimento_operacao.configuracao a LEFT JOIN atendimento_operacao.configuracao s ON s.chave='agente_skills' LEFT JOIN atendimento_operacao.configuracao t ON t.chave='agente_tom' LEFT JOIN atendimento_operacao.configuracao p ON p.chave='agente_prompt' WHERE a.chave='agente'`);const c=r.rows[0];if(!c)throw Error('AGENTE_CONFIGURACAO_AUSENTE');
+  const skills=c.skills??SKILLS_AGENTE_PADRAO,tom=c.tom??TOM_AGENTE_PADRAO,prompt=c.prompt??PROMPT_CENTRAL_PADRAO;validarConfiguracaoAgente(c.conteudo);validarSkillsAgente(skills);validarTomAgente(tom);validarPromptCentralAgente(prompt);return {configuracao:normalizarConfiguracaoAgente(c.conteudo),versao:Number(c.versao),skills,tom,prompt};
  });}
  async configuracaoVigente(t:TarefaIA,versao?:number):Promise<boolean>{return this.tx(async tx=>{
   const r=await tx.query(`SELECT 1 FROM atendimento_operacao.agente_tarefa a JOIN atendimento_operacao.configuracao c ON c.chave='agente' AND c.versao=a.configuracao_versao WHERE a.id=$1 AND a.empresa_id=$2 AND a.hash=$3 AND ($4::bigint IS NULL OR c.versao=$4)`,[t.id,this.empresaId,hashTarefa(t),versao??null]);return r.rowCount===1;
@@ -185,7 +257,7 @@ export class RepositorioAgentePg implements RepositorioIA {
  });}
  async prepararMidia(t:TarefaIA,p:{pergunta:string;midia:NonNullable<TarefaIA['midia']>}) {return this.tx(async tx=>{
   const cfg=await travarConfiguracaoTx(tx);
-  const nova={...t,...p,tema:temaPergunta(p.pergunta)};
+  const nova={...t,...p,...await classificarMensagemTx(tx,p.pergunta,t.conversaId,t.id)};
   const r=await tx.query(`UPDATE atendimento_operacao.agente_tarefa SET tarefa=$3::jsonb,hash=$4,midia_estado=$5,atualizada_em=now() WHERE id=$1 AND empresa_id=$2 AND decisao IS NULL AND lease IS NULL AND configuracao_versao=$6 RETURNING tarefa`,[t.id,this.empresaId,JSON.stringify(nova),hashTarefa(nova),p.midia.preservada?'concluida':'indisponivel',cfg.versao]);return r.rowCount===1?nova:t;
  });}
  async contextoRecente(t:TarefaIA) {return this.tx(async tx=>{

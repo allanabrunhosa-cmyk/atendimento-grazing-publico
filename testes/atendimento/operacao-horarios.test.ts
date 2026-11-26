@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest';
-import {conferirHorarioAgente,type HorariosAgente} from '../../src/lib/atendimento/operacao-horarios';
+import {conferirHorarioAgente,HORARIO_INTEGRAL_AGENTE,horarioIntegralAgente,type HorariosAgente} from '../../src/lib/atendimento/operacao-horarios';
 const base:HorariosAgente={timezone:'America/Sao_Paulo',inicio:'09:00',fim:'18:00',dias:[1,2,3,4,5],equipes:[],feriados:[],respostaForaHorario:'Retornaremos {{horario}}.',cooldownMinutos:360};
 describe('horários efetivos do agente, sem restringir os humanos',()=>{
  it('usa o fuso do negócio, fecha no fim e calcula a próxima abertura',()=>{
@@ -16,6 +16,13 @@ describe('horários efetivos do agente, sem restringir os humanos',()=>{
   const c={...base,feriados:[{equipeId:null,data:'2026-10-12',aberto:false,inicio:null,fim:null},{equipeId:'producao',data:'2026-10-12',aberto:true,inicio:'10:00',fim:'14:00'}]};
   expect(conferirHorarioAgente(c,'producao',new Date('2026-10-12T15:00:00Z')).aberto).toBe(true);
   expect(conferirHorarioAgente(c,'comercial',new Date('2026-10-12T15:00:00Z')).resposta).toBe('Retornaremos 13/10/2026 às 09:00.');
+ });
+ it('24 horas, todos os dias: aberta no último minuto, em feriado fechado e fora do horário da equipe',()=>{
+  const c={...base,...HORARIO_INTEGRAL_AGENTE,dias:[...HORARIO_INTEGRAL_AGENTE.dias],equipes:[{equipeId:'producao',dia:0,aberto:false,inicio:null,fim:null}],feriados:[{equipeId:null,data:'2026-12-25',aberto:false,inicio:null,fim:null}]};
+  expect(horarioIntegralAgente(c)).toBe(true);
+  for(const quando of ['2026-10-10T02:59:00Z','2026-10-11T15:00:00Z','2026-12-25T15:00:00Z'])expect(conferirHorarioAgente(c,'producao',new Date(quando)),quando).toMatchObject({aberto:true,resposta:'',valido:true});
+  expect(horarioIntegralAgente({...c,dias:[1,2,3,4,5]})).toBe(false);
+  expect(horarioIntegralAgente({...c,fim:'23:58'})).toBe(false);
  });
  it('não inventa retorno se configuração estiver inválida ou sem abertura',()=>{
   expect(conferirHorarioAgente({...base,timezone:'fuso-invalido'},null).valido).toBe(false);

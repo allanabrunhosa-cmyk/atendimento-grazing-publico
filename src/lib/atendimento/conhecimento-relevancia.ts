@@ -34,13 +34,33 @@ export function pontuarConhecimento(pergunta: string, fonte: { pergunta: string;
   return pontos;
 }
 
-/** Ordena por pontuação; empate preserva a ordem recebida. Fontes sem termo em
- * comum entram só quando `manterSemPontos` as aceita, depois das pontuadas. */
-export function ordenarPorRelevancia<T extends { pergunta: string; conteudo: string }>(pergunta: string, fontes: readonly T[], limite: number, manterSemPontos: (f: T) => boolean): T[] {
+/** Ordena por pontuação. Fontes sem termo em comum não ficam de fora: perguntas
+ * curtas ou coloquiais ("consigo para sexta?") quase não têm palavras em comum
+ * com a resposta certa, e quem decide se a fonte serve é o modelo. Elas
+ * completam a lista depois das pontuadas, primeiro as do tema (`doTema`).
+ * Empate preserva a ordem recebida. */
+export function ordenarPorRelevancia<T extends { pergunta: string; conteudo: string }>(pergunta: string, fontes: readonly T[], limite: number, doTema: (f: T) => boolean): T[] {
   return fontes
-    .map((fonte, ordem) => ({ fonte, ordem, pontos: pontuarConhecimento(pergunta, fonte) }))
-    .filter(v => v.pontos > 0 || manterSemPontos(v.fonte))
-    .sort((a, b) => b.pontos - a.pontos || a.ordem - b.ordem)
+    .map((fonte, ordem) => ({ fonte, ordem, pontos: pontuarConhecimento(pergunta, fonte), tema: doTema(fonte) ? 1 : 0 }))
+    .sort((a, b) => b.pontos - a.pontos || b.tema - a.tema || a.ordem - b.ordem)
     .slice(0, limite)
     .map(v => v.fonte);
+}
+
+/** Quanto conhecimento segue ao modelo numa chamada. O teto é de caracteres,
+ * não de quantidade: respostas curtas de FAQ cabem todas, e o pior caso fica
+ * abaixo das antigas 10 fontes de até 4.000 caracteres. */
+export const FONTES_PARA_MODELO = { maximo: 25, caracteres: 12000, porFonte: 4000 } as const;
+
+/** Mantém a ordem recebida e para quando a próxima fonte estouraria o teto. */
+export function selecionarFontesParaModelo<T extends { conteudo: string }>(fontes: readonly T[], teto: { maximo: number; caracteres: number; porFonte: number } = FONTES_PARA_MODELO): T[] {
+  const escolhidas: T[] = [];
+  let total = 0;
+  for (const fonte of fontes) {
+    if (escolhidas.length >= teto.maximo) break;
+    if (fonte.conteudo.length > teto.porFonte) continue;
+    if (total + fonte.conteudo.length > teto.caracteres) break;
+    escolhidas.push(fonte); total += fonte.conteudo.length;
+  }
+  return escolhidas;
 }

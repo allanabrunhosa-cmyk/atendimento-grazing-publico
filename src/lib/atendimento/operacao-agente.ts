@@ -2,10 +2,11 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { ServicoDuvidas, possuiDadosPessoais, type AtorDuvidas, type PermissaoDuvidas, type TransacaoDuvidas } from './duvidas-aprendizagem';
+import { FONTES_PARA_MODELO, selecionarFontesParaModelo } from './conhecimento-relevancia';
 import { criarRepositorioDuvidasPg } from './repositorio-duvidas-pg';
 import { contextoAtualIA, orquestrarIA, type FonteIA, type TarefaIA,type DecisaoIA,type FerramentaIA } from './ia-orquestrador';
 import { criarProvedorEvidenciasDireto } from './ia-orquestrador-direto';
-import { RepositorioAgentePg, validarConfiguracaoAgente,hashTarefaAgente,hashConfiguracaoAgente,normalizarConfiguracaoAgente,validarSkillsAgente,validarTomAgente,SKILLS_AGENTE_PADRAO,TOM_AGENTE_PADRAO,skillPermiteAgente,perfilEstiloAgente,comporTextoAgente,invalidarConfiguracaoAgenteTx,type ConfiguracaoAgente,type ConfiguracaoSkillsAgente,type TomAgente,type ProvedorAgente } from './repositorio-agente-pg';
+import { RepositorioAgentePg, validarConfiguracaoAgente,hashTarefaAgente,hashConfiguracaoAgente,normalizarConfiguracaoAgente,validarSkillsAgente,validarTomAgente,validarPromptCentralAgente,SKILLS_AGENTE_PADRAO,TOM_AGENTE_PADRAO,skillPermiteAgente,perfilEstiloAgente,comporTextoAgente,invalidarConfiguracaoAgenteTx,type ConfiguracaoAgente,type ConfiguracaoSkillsAgente,type TomAgente,type ProvedorAgente,type PromptCentralAgente } from './repositorio-agente-pg';
 import { criarFerramentasWoo, criarLeituraFerramentas, criarVozDireta, type CredenciaisVoz, type CredenciaisWoo } from './operacao-ferramentas';
 import type { RepositorioOperacaoPg } from './operacao-repositorio-pg';
 import type { IdentidadeOperacao,AcaoOperacao } from './operacao-tipos';
@@ -17,6 +18,7 @@ import {configuracaoAgenteParaCorte} from './operacao-agente-corte';
 import {processarAlertaApoio,registrarAlertaApoioTx,validarEnvioAlertaApoioTx,observarAlertaApoioTx} from './operacao-alerta-apoio';
 import {estadoPainel,controlarAgente,testarAgente,reconciliarAgente,type PedidoReconciliacaoAgente} from './operacao-agente-painel';
 import {MOTIVO_RESPOSTA_REDIGIDA,validarTextoRedigidoIA} from './ia-resposta-fundamentada';
+import {pessoasInformadas} from './pessoas-informadas';
 import type {ServicoComercialOperacao} from './operacao-comercial';
 
 export type ConfiguracaoPrivadaAgente = {
@@ -47,7 +49,7 @@ export type DependenciasAgenteOperacional = {
 };
 export const IDENTIDADE_AGENTE:IdentidadeOperacao={id:'service:donatella-ia',nome:'Donatella',perfilId:'servico-donatella',sessaoVersao:1,permissoes:[],tipo:'ia'};
 const atorDuvidas=(i:IdentidadeOperacao,empresaId:string):AtorDuvidas=>({id:i.id,empresaId,versaoSessao:i.sessaoVersao});
-const siglaMotivo=(s:string)=>s==='HUMANO_SOLICITADO'||s==='REVISAO_HUMANA_OBRIGATORIA'?'decisao_humana':s==='FONTES_CONFLITANTES'?'conflito':s.includes('INDISPONIVEL')?'ferramenta_indisponivel':'fonte_insuficiente';
+const siglaMotivo=(s:string)=>['HUMANO_SOLICITADO','REVISAO_HUMANA_OBRIGATORIA','PEDIDO_CORPORATIVO','DIFICULDADE_NO_SITE','ORCAMENTO'].includes(s)?'decisao_humana':s==='FONTES_CONFLITANTES'?'conflito':s.includes('INDISPONIVEL')?'ferramenta_indisponivel':'fonte_insuficiente';
 function hashId(s:string){const b=createHash('sha256').update(s).digest('hex');return `${b.slice(0,8)}-${b.slice(8,12)}-4${b.slice(13,16)}-a${b.slice(17,20)}-${b.slice(20,32)}`;}
 const financeiro=/alerg|anafilax|intoler|reembol|estorno|desconto|fiscal|privil[eé]gio/i;
 const temasDoAgente:TarefaIA['tema'][]=['produto','preco','estoque','frete','agenda','pedido','procedimento','alergia','excecao'];
@@ -128,6 +130,31 @@ export class ServicoAgenteOperacional {
   if(!await this.d.operacao.autorizar(i,'ia.editar'))throw Error('OPERACAO_ACESSO_NEGADO');
   const r=await this.d.operacao.configurar(i,{chave:'atendimento',conteudo:{condicoesEntrega:p.texto.trim(),entregaAprovada:p.aprovada},versao:p.versao,idempotencia:p.idempotencia});
   return {versao:Number(r.versao)};
+ }
+ /** Prompt central: base de quem a Donatella é e de como atende. Ver exige
+  * ia.visualizar; mudar exige ia.editar, cria versão, fica na auditoria e
+  * descarta respostas pendentes preparadas com a versão anterior. */
+ async promptCentral(i:IdentidadeOperacao){
+  return this.d.operacao.transacao(async tx=>{
+   await this.d.operacao.exigir(tx,i,'ia.visualizar');
+   const r=(await tx.query<{conteudo:PromptCentralAgente;versao:string}>("SELECT conteudo,versao FROM atendimento_operacao.configuracao WHERE chave='agente_prompt'")).rows[0];
+   return {texto:typeof r?.conteudo?.texto==='string'?r.conteudo.texto:'',versao:Number(r?.versao??0)};
+  });
+ }
+ async configurarPromptCentral(i:IdentidadeOperacao,p:{texto:string;versao:number;idempotencia:string}){
+  if(!Number.isSafeInteger(p.versao)||p.versao<0)throw Error('OPERACAO_VERSAO_INVALIDA');
+  const conteudo:PromptCentralAgente={texto:typeof p.texto==='string'?p.texto.trim():p.texto};validarPromptCentralAgente(conteudo);
+  return this.d.operacao.transacao(async tx=>{
+   await this.d.operacao.exigir(tx,i,'ia.editar');
+   return this.d.operacao.comando(tx,i,p.idempotencia,p,async()=>{
+    const global=await tx.query<{versao:string}>("SELECT versao FROM atendimento_operacao.configuracao WHERE chave='agente' FOR UPDATE");if(!global.rows[0])throw Error('AGENTE_CONFIGURACAO_AUSENTE');
+    const atual=await tx.query<{versao:string}>("SELECT versao FROM atendimento_operacao.configuracao WHERE chave='agente_prompt' FOR UPDATE");if(Number(atual.rows[0]?.versao??0)!==p.versao)throw Error('OPERACAO_CONFLITO');
+    const s=await tx.query<{versao:string}>("INSERT INTO atendimento_operacao.configuracao(chave,conteudo) VALUES('agente_prompt',$1::jsonb) ON CONFLICT(chave) DO UPDATE SET conteudo=excluded.conteudo,versao=atendimento_operacao.configuracao.versao+1,atualizada_em=now() RETURNING versao",[JSON.stringify(conteudo)]);
+    const agente=await tx.query<{versao:string}>("UPDATE atendimento_operacao.configuracao SET versao=versao+1,atualizada_em=now() WHERE chave='agente' RETURNING versao");
+    const invalidadas=await invalidarConfiguracaoAgenteTx(tx,this.d.configuracao.empresaId);await this.d.operacao.auditar(tx,i,'agente_prompt','configurar_agente_prompt',Number(s.rows[0].versao));
+    return {versao:Number(s.rows[0].versao),versaoAgente:Number(agente.rows[0].versao),...invalidadas};
+   });
+  });
  }
  async estado(i:IdentidadeOperacao) {
   if(!await this.d.operacao.autorizar(i,'ia.visualizar'))throw Error('OPERACAO_ACESSO_NEGADO');
@@ -219,9 +246,9 @@ export class ServicoAgenteOperacional {
  }
  private async conhecimento(t:TarefaIA):Promise<FonteIA[]> {
   const ator=atorDuvidas(IDENTIDADE_AGENTE,t.empresaId);
-  // Uma consulta só, ordenada pelas palavras da pergunta; as 10 mais relevantes seguem ao modelo.
-  const encontrados=await this.duvidas(IDENTIDADE_AGENTE).consultarConhecimentoRelevante(ator,{empresaId:t.empresaId,tema:t.tema,pergunta:t.pergunta,clienteId:t.clienteId,conversaId:t.conversaId,limite:10});
-  const fontes:FonteIA[]=encontrados.filter(f=>f.conteudo.length<=4000).map(f=>({id:f.id,versao:f.versao,empresaId:t.empresaId,clienteId:t.clienteId,tema:t.tema,origem:'conhecimento',estado:'aprovado',inicio:0,fim:Date.parse(f.vigenteAte),conteudo:f.conteudo}));
+  // Uma consulta só, ordenada pelas palavras da pergunta; segue ao modelo o que couber no teto de caracteres.
+  const encontrados=await this.duvidas(IDENTIDADE_AGENTE).consultarConhecimentoRelevante(ator,{empresaId:t.empresaId,tema:t.tema,pergunta:t.pergunta,clienteId:t.clienteId,conversaId:t.conversaId,limite:FONTES_PARA_MODELO.maximo});
+  const fontes:FonteIA[]=selecionarFontesParaModelo(encontrados).map(f=>({id:f.id,versao:f.versao,empresaId:t.empresaId,clienteId:t.clienteId,tema:t.tema,origem:'conhecimento',estado:'aprovado',inicio:0,fim:Date.parse(f.vigenteAte),conteudo:f.conteudo}));
   // Saudação operacional não contém preço, prazo ou regra comercial presumida.
   if(t.tema==='procedimento'&&/^(ol[aá]|oi|bom dia|boa tarde|boa noite|obrigad[oa])(?:[!.,\s]*)$/i.test(t.pergunta.trim()))fontes.push({id:'donatella_saudacao_v1',versao:1,empresaId:t.empresaId,clienteId:t.clienteId,tema:t.tema,origem:'conhecimento',estado:'aprovado',inicio:0,fim:Date.now()+60000,conteudo:'Olá! Sou a Donatella, assistente da Grazing Table & Co. Como posso ajudar você hoje?'});
   return fontes;
@@ -251,6 +278,8 @@ export class ServicoAgenteOperacional {
   const privado=this.d.configuracao;
   const custoSintese=privado.custoSinteseCentavos??privado.custoVozCentavos;
   if(privado.sinteseVozHabilitada!==true||t.midia?.tipo!=='audio'||!privado.voz?.vozId)return;
+  // Link não se toca em áudio: a resposta com endereço segue em texto.
+  if(/https?:\/\/|www\./iu.test(texto))return;
   const comportamento=(await this.d.operacao.pool.query("SELECT conteudo->'comportamentos'->>'respostaAudio' ativo FROM atendimento_operacao.configuracao WHERE chave='agente_legado'")).rows[0]?.ativo;
   if(comportamento==='false')return;
   const anexoId=hashId('agente-audio:'+t.id);
@@ -306,7 +335,7 @@ export class ServicoAgenteOperacional {
  return async(nome:FerramentaIA,t:TarefaIA,signal:AbortSignal)=>{
   if(this.d.comercial&&nome==='search_products'){
    const recente=await this.repositorio.contextoRecente(t);
-   return this.d.comercial.fontesProdutos(t,signal,recente.filter(m=>m.autor==='cliente').map(m=>m.texto));
+   return this.d.comercial.fontesProdutos(t,signal,recente.filter(m=>m.autor==='cliente').map(m=>m.texto),async()=>(await this.conhecimento(t)).map(f=>f.conteudo));
   }
   if(this.d.comercial&&nome==='get_order')return this.d.comercial.fontesPedido(IDENTIDADE_AGENTE,t,signal);
   return legado(nome,t,signal);
@@ -336,7 +365,7 @@ export class ServicoAgenteOperacional {
    if(a.tarefa.tema==='produto')fontes.push(...await this.conhecimento(a.tarefa));
    const escolhidas=a.decisao.fontes.map(r=>fontes.find(f=>f.id===r.id&&f.versao===r.versao&&f.fim>Date.now()));
    const confirmadas=escolhidas.filter((f):f is FonteIA=>!!f);
-   const textoValido=a.decisao.motivo===MOTIVO_RESPOSTA_REDIGIDA?validarTextoRedigidoIA(a.decisao.texto,confirmadas):comporTextoAgente([confirmadas.map(f=>f.conteudo).join('\n')],atual.tom)===a.decisao.texto;
+   const textoValido=a.decisao.motivo===MOTIVO_RESPOSTA_REDIGIDA?validarTextoRedigidoIA(a.decisao.texto,confirmadas,pessoasInformadas([...(await this.repositorio.contextoRecente(a.tarefa)).filter(m=>m.autor==='cliente').map(m=>m.texto),a.tarefa.pergunta])):comporTextoAgente([confirmadas.map(f=>f.conteudo).join('\n')],atual.tom)===a.decisao.texto;
    return escolhidas.length>0&&escolhidas.every(Boolean)&&textoValido&&await this.repositorio.configuracaoVigente(a.tarefa,atual.versao);
   }catch{return false;}
  }
@@ -373,7 +402,7 @@ export class ServicoAgenteOperacional {
   const leitura=this.ferramentas();
   try {
    const tarefa=t;
-   const provedor=criarProvedorEvidenciasDireto({provedor:cfg.configuracao.provedor,chave:this.credencial(cfg.configuracao.provedor??'anthropic')?.chave??'',modelo:cfg.configuracao.modelo,maxTokens:cfg.configuracao.maxTokens,respostaRedigida:true,estilo:perfilEstiloAgente(cfg.tom,cfg.skills,tarefa.tema),registrarConsumo:o=>this.repositorio.registrarConsumo(tarefa,o)},this.d.transporteModelo??fetch);
+   const provedor=criarProvedorEvidenciasDireto({provedor:cfg.configuracao.provedor,chave:this.credencial(cfg.configuracao.provedor??'anthropic')?.chave??'',modelo:cfg.configuracao.modelo,maxTokens:cfg.configuracao.maxTokens,respostaRedigida:true,estilo:perfilEstiloAgente(cfg.tom,cfg.skills,tarefa.tema),promptCentral:cfg.prompt.texto,...(cfg.configuracao.esforco?{esforco:cfg.configuracao.esforco}:{}),registrarConsumo:o=>this.repositorio.registrarConsumo(tarefa,o)},this.d.transporteModelo??fetch);
    const decisao=await orquestrarIA(tarefa,cfg.configuracao.limites,{repositorio:this.repositorio,respostaRedigida:true,cancelamento:controller.signal,automaticoAutorizado:cfg.configuracao.autoridadeAutomatica&&this.d.configuracao.autoridadeAutomatica,politicaHorario:horario.politica,referenciaOperacional:async()=>horario.referencia,
     autorizar:async(a,_acao,c)=>a===IDENTIDADE_AGENTE.id&&c.empresaId===tarefa.empresaId&&await this.autorizado(tarefa,cfg.versao),
     conhecimento:p=>skillPermiteAgente(cfg.skills,p.tema,'consultar_conhecimento')?this.conhecimento(p):Promise.resolve([]),

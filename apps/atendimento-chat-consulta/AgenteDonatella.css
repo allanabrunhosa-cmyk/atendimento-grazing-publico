@@ -12,3 +12,4 @@ ul.agente-pendencias{padding-left:32px}.agente-pendencias ul{padding-left:20px}
 .agente-confirmacao{background:var(--card);color:var(--foreground)}.agente-confirmacao p{line-height:1.6}.agente-confirmacao>.toolbar{justify-content:flex-end;flex-wrap:wrap}.agente-confirmacao .btn{white-space:normal}
 .agente-confirmacao .agente-confirmacao-cabecalho{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px}.agente-confirmacao-cabecalho [data-slot=dialog-title]{margin:0}.agente-confirmacao-cabecalho .close-icon{flex:none}
 @media(max-width:600px){.agente-dados{grid-template-columns:1fr}.agente-confirmacao>.toolbar>.btn{flex:1 1 160px}}
+.agente-modelo{display:grid;gap:8px;min-width:0}

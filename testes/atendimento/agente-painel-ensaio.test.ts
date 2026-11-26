@@ -3,7 +3,7 @@ import type {PoolClient} from 'pg';
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import type {ConfiguracaoPrivadaAgente} from '../../src/lib/atendimento/operacao-agente';
 import type {RepositorioOperacaoPg} from '../../src/lib/atendimento/operacao-repositorio-pg';
-import type {FonteIA,TarefaIA} from '../../src/lib/atendimento/ia-orquestrador';
+import {CONTEUDO_COMERCIAL_MUTAVEL,type FonteIA,type TarefaIA} from '../../src/lib/atendimento/ia-orquestrador';
 import {SKILLS_AGENTE_PADRAO,TOM_AGENTE_PADRAO,type ConfiguracaoAgente} from '../../src/lib/atendimento/repositorio-agente-pg';
 vi.mock('server-only',()=>({}));
 import {AVISO_ENSAIO_DONATELLA,fontesFerramentaEnsaio,fontesConhecimentoEnsaio} from '../../src/lib/atendimento/operacao-agente-ensaio';
@@ -70,16 +70,16 @@ describe('fontes fictícias do painel',()=>{
 
 describe('Testar Donatella com catálogo fictício e política real',()=>{
  it('recomenda para 2 pessoas com fonte de produto, sem depender do conhecimento genérico',async()=>{
-  const p=painel(),r=await p.testar();expect(r).toMatchObject({estado:'concluido',enviosReais:false,reservaCentavos:50,consumo:{observado:true,tokensEntrada:100}});expect(r.texto).toContain(AVISO_ENSAIO_DONATELLA);expect(r.texto).toContain('serve 2 pessoas');expect(r.texto).toContain('https://loja.example/');expect(p.fontes().every(f=>f.origem==='ferramenta')).toBe(true);expect(p.transporte).toHaveBeenCalledTimes(1);expect(p.real).not.toHaveBeenCalled();expect(p.config).toEqual(configuracao);
+  const p=painel(),r=await p.testar();expect(r).toMatchObject({estado:'concluido',enviosReais:false,reservaCentavos:50,consumo:{observado:true,tokensEntrada:100}});expect(r.texto).toContain(AVISO_ENSAIO_DONATELLA);expect(r.texto).toContain('serve 2 pessoas');expect(r.texto).toContain('https://loja.example/');expect(p.fontes()[0].origem).toBe('ferramenta');expect(p.fontes().filter(f=>f.origem==='conhecimento').every(f=>!CONTEUDO_COMERCIAL_MUTAVEL.test(f.conteudo))).toBe(true);expect(p.transporte).toHaveBeenCalledTimes(1);expect(p.real).not.toHaveBeenCalled();expect(p.config).toEqual(configuracao);
  });
  it('faz pergunta de esclarecimento sem abrir apoio humano quando há base de catálogo',async()=>{
   const p=painel();p.resposta('esclarecer');const r=await p.testar('Qual produto você recomenda?');expect(r.estado).toBe('concluido');expect(r.texto).toContain('Qual é a ocasião e o tipo de refeição?');expect(p.real).not.toHaveBeenCalled();
  });
  it('consulta somente o pedido fictício e informa o limite da interpretação de status',async()=>{
-  const p=painel();p.resposta('pedido');const r=await p.testar('Qual é o status do pedido?');expect(r.estado).toBe('concluido');expect(r.texto).toContain('#ENS-1001');expect(p.fontes()[0]).toMatchObject({clienteId:'cliente_ficticio',origem:'ferramenta',tema:'pedido'});expect(p.real).not.toHaveBeenCalled();
+  const p=painel();p.resposta('pedido');const r=await p.testar('Qual é o status do pedido?');expect(r.estado).toBe('concluido');expect(r.texto).toContain('#ENS-1001');expect(p.fontes()[0]).toMatchObject({origem:'ferramenta',conteudo:expect.stringContaining('#ENS-1001')});expect(p.real).not.toHaveBeenCalled();
  });
  it('respeita skill de catálogo desabilitada e não gasta reserva sem fonte',async()=>{
-  const p=painel();p.skills.skills.find(s=>s.id==='catalogo')!.habilitada=false;const r=await p.testar();expect(r).toMatchObject({estado:'apoio',motivo:'SEM_FONTE_VIGENTE',reservaCentavos:0});expect(p.transporte).not.toHaveBeenCalled();
+  const p=painel();for(const s of p.skills.skills)if(s.ferramentas.includes('search_products'))s.habilitada=false;const r=await p.testar();expect(r).toMatchObject({estado:'apoio',motivo:'SEM_FONTE_VIGENTE',reservaCentavos:0});expect(p.transporte).not.toHaveBeenCalled();
  });
  it.each(['Tenho alergia a leite. Recomende uma tábua segura.','Consegue dar desconto?','Quero falar com atendente humano.','Qual o frete para meu CEP?'])('preserva apoio em caso importante: %s',async pergunta=>{
   const p=painel(),r=await p.testar(pergunta);expect(r.estado).toBe('apoio');expect(r.reservaCentavos).toBe(0);expect(p.transporte).not.toHaveBeenCalled();expect(p.real).not.toHaveBeenCalled();

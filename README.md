@@ -23,7 +23,8 @@ npm run dev
 
 `npm run dev:ficticio` abre o painel em <http://127.0.0.1:4192/operacao/chat?ambiente=ensaio> com uma API em memória.
 Não precisa de banco nem de login, e nada sai do computador: a Donatella não chama a IA, o chat não envia ao WhatsApp e o site não é consultado.
-Conhecimento, dúvidas e condições de entrega usam as mesmas regras e rotas do servidor real; o "Testar Donatella" mostra o assunto e as fontes que ela usaria.
+Conhecimento, dúvidas, condições de entrega e o prompt central usam as mesmas regras e rotas do servidor real; o "Testar Donatella" mostra o assunto e as fontes que ela usaria.
+Para ver a resposta da IA real, abra <http://127.0.0.1:4192/operacao/conversa-teste> com `DONATELLA_FICTICIA_CHAVE` (chave da Anthropic de quem testa) no ambiente do comando. Sem ela, essa página fica desligada. O gasto para em `DONATELLA_FICTICIA_TETO_USD` (padrão: 1 dólar por execução). `DONATELLA_FICTICIA_CATALOGO` aponta para um catálogo local, fora do projeto. Não use dados de clientes e não grave a chave em arquivo do projeto.
 Os dados são de exemplo e voltam ao início a cada execução. Serve para conferir telas antes do PR; não substitui os testes nem um ambiente com banco.
 
 Depois de validar, integre a alteração à `main` por pull request. A publicação exige checkout limpo e a mesma revisão no GitHub:

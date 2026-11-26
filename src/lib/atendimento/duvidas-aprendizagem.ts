@@ -233,8 +233,8 @@ export class ServicoDuvidas {
   async revogarConhecimento(ator: AtorDuvidas, p: { id: string; revisao: number; motivo: string }) { texto(p.motivo, 1000); return this.d.repositorio.transacao(ator.empresaId, async tx => { const c = await tx.obter<CandidatoConhecimento>('candidatos', p.id); if (!c) falha('CONHECIMENTO_AUSENTE'); const v = c.versoes.at(-1)!; await this.autorizado(tx, ator, 'conhecimento.revogar', { empresaId: c.empresaId, clienteId: v.clienteId, conversaId: v.conversaId }); if (c.revisao !== p.revisao) falha('CONHECIMENTO_REVISAO_CONFLITANTE'); v.estado = 'expirado'; v.revisadaEm = this.agora(); v.motivoRevisao = p.motivo; c.revisao++; await tx.salvar('candidatos', c); await tx.epoca(true); await this.auditoria(tx, ator, c.id, 'conhecimento_revogado', c.revisao); return c; }); }
   async consultarConhecimento(ator: AtorDuvidas, p: { empresaId: string; tema: string; clienteId?: string; conversaId?: string }): Promise<FonteConhecimento[]> { texto(p.tema, 200); return this.fontesVigentes(ator, p, f => normalizar(f.pergunta + ' ' + f.conteudo + ' ' + f.categoria).includes(normalizar(p.tema))); }
   /** Mesmas regras de aprovação, vigência e escopo de consultarConhecimento.
-   * Ordena pela pergunta do cliente; fontes do tema sem termo em comum entram
-   * depois das pontuadas, como antes. */
+   * Ordena pela pergunta do cliente. Fontes sem termo em comum completam a
+   * lista até o limite, primeiro as do tema. */
   async consultarConhecimentoRelevante(ator: AtorDuvidas, p: { empresaId: string; tema: string; pergunta: string; clienteId?: string; conversaId?: string; limite?: number }): Promise<FonteConhecimento[]> {
     texto(p.tema, 200); texto(p.pergunta, 4000);
     const limite = p.limite ?? 10; if (!Number.isSafeInteger(limite) || limite < 1 || limite > 50) falha('DUVIDAS_ENTRADA_INVALIDA');

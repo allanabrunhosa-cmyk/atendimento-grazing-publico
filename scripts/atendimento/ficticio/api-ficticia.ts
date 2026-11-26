@@ -3,18 +3,26 @@ import { randomUUID } from 'node:crypto';
 import { ServicoDuvidas, type AtorDuvidas } from '../../../src/lib/atendimento/duvidas-aprendizagem';
 import { criarExtensaoAgenteOperacional } from '../../../src/lib/atendimento/operacao-agente-http';
 import { validarCondicoesEntrega, type ServicoAgenteOperacional } from '../../../src/lib/atendimento/operacao-agente';
-import { SKILLS_AGENTE_PADRAO, TOM_AGENTE_PADRAO, skillPermiteAgente, temaPergunta, validarConfiguracaoAgente, validarSkillsAgente, validarTomAgente, type ConfiguracaoAgente, type ConfiguracaoSkillsAgente, type FerramentaSkillAgente, type TomAgente } from '../../../src/lib/atendimento/repositorio-agente-pg';
+import { estadoVenda, pedidoOrcamento, type MotivoVendaEquipe } from '../../../src/lib/atendimento/encaminhamento-venda';
+import { escolherCatalogo, fonteSiteOficial, fontesProdutosComerciais, podeSugerirProdutos, quantidadeComercial } from '../../../src/lib/atendimento/operacao-comercial';
+import type { ProdutoHubLeitura } from '../../../src/lib/atendimento/operacao-hub-produtos';
+import type { ProdutoComercial } from '../../../src/lib/atendimento/comercial-tipos';
+import { SKILL_CONSULTORA_VENDAS } from '../../../src/lib/atendimento/skill-consultora-vendas';
+import { SKILLS_AGENTE_PADRAO, TOM_AGENTE_PADRAO, PROMPT_CENTRAL_PADRAO, validarPromptCentralAgente, skillPermiteAgente, classificarNaConversa, temaPergunta, validarConfiguracaoAgente, validarSkillsAgente, validarTomAgente, type ConfiguracaoAgente, type ConfiguracaoSkillsAgente, type FerramentaSkillAgente, type TomAgente } from '../../../src/lib/atendimento/repositorio-agente-pg';
 import { validarConfiguracaoFollowup, type ConfiguracaoFollowup } from '../../../src/lib/atendimento/operacao-followup';
 import { statusErroOperacao } from '../../../src/lib/atendimento/operacao-status-erro';
-import type { TemaIA } from '../../../src/lib/atendimento/ia-orquestrador';
+import { CONTEUDO_COMERCIAL_MUTAVEL, type FerramentaIA, type FonteIA, type TarefaIA, type TemaIA } from '../../../src/lib/atendimento/ia-orquestrador';
+import { criarConversaIA, MODELOS_CONVERSA, type IaFicticia } from './conversa-ia';
+import { FONTES_PARA_MODELO, selecionarFontesParaModelo } from '../../../src/lib/atendimento/conhecimento-relevancia';
 import type { IdentidadeOperacao } from '../../../src/lib/atendimento/operacao-tipos';
 import { CAPACIDADES_ATENDIMENTO } from '../../../src/lib/permissoes/atendimento';
 import { RepositorioDuvidasMemoria } from './repositorio-duvidas-memoria';
-import { COLEGA_FICTICIO, EMPRESA_FICTICIA, EQUIPE_FICTICIA, FONTES_FICTICIAS, USUARIO_FICTICIO, conversasFicticias, type ConversaFicticia, type MensagemFicticia } from './dados-ficticios';
+import { COLEGA_FICTICIO, EMPRESA_FICTICIA, EQUIPE_FICTICIA, FONTES_FICTICIAS, PRODUTOS_FICTICIOS, SITE_FICTICIO, USUARIO_FICTICIO, conversasFicticias, type ProdutoFicticio, type ConversaFicticia, type MensagemFicticia } from './dados-ficticios';
 
 /** API do painel para o ambiente fictício local (npm run dev:ficticio).
  * Tudo fica em memória e some ao reiniciar. Não há banco, login do HUB, IA,
- * WhatsApp, WooCommerce nem rede: nenhuma rota abre conexão externa.
+ * WhatsApp, WooCommerce nem rede: nenhuma rota abre conexão externa. A exceção é
+ * opcional: com a chave de quem testa, /ficticio/conversa chama a Anthropic.
  * Conhecimento, dúvidas e condições de entrega usam as mesmas regras e as
  * mesmas rotas HTTP do servidor real. */
 export type ApiFicticia = { atender(req: IncomingMessage, res: ServerResponse): Promise<boolean>; encerrar(): void };
@@ -45,8 +53,12 @@ async function lerCorpo(req: IncomingMessage): Promise<Record<string, unknown>> 
   return valor as Record<string, unknown>;
 }
 
-export async function criarApiFicticia(o: { agora?: () => Date } = {}): Promise<ApiFicticia> {
+/** Catálogo local de quem testa, fora do projeto. Sem ele, valem os exemplos. */
+export type CatalogoLocal = { site: string; produtos: ProdutoFicticio[] };
+
+export async function criarApiFicticia(o: { agora?: () => Date; ia?: IaFicticia; catalogo?: CatalogoLocal } = {}): Promise<ApiFicticia> {
   const agora = o.agora ?? (() => new Date());
+  const site = o.catalogo?.site ?? SITE_FICTICIO, catalogo = o.catalogo?.produtos ?? PRODUTOS_FICTICIOS;
   const csrf = randomUUID();
   const identidade: IdentidadeOperacao = { ...USUARIO_FICTICIO, sessaoVersao: 1, permissoes: Object.keys(CAPACIDADES_ATENDIMENTO), tipo: 'usuario' };
   const ator: AtorDuvidas = { id: identidade.id, empresaId: EMPRESA_FICTICIA, versaoSessao: 1 };
@@ -84,35 +96,104 @@ export async function criarApiFicticia(o: { agora?: () => Date } = {}): Promise<
   // Configuração da Donatella, com as validações reais.
   let configuracaoAgente: ConfiguracaoAgente = { modo: 'desligado', provedor: 'anthropic', modelo: 'claude-sonnet-4-5-20250929', maxTokens: 512, equipeApoio: EQUIPE_FICTICIA.id, limites: { maxChamadas: 2, custoPorChamadaCentavos: 50, maxCustoCentavos: 100, maxDuracaoMs: 30000, timeoutChamadaMs: 20000 }, custoCentavosDia: 500, moedaOrcamento: 'USD', autoridadeAutomatica: false, grupoExterno: 'indisponivel' };
   validarConfiguracaoAgente(configuracaoAgente);
-  let skills: ConfiguracaoSkillsAgente = structuredClone(SKILLS_AGENTE_PADRAO), tom: TomAgente = structuredClone(TOM_AGENTE_PADRAO), followup: ConfiguracaoFollowup = { habilitado: false, minutos: 60, texto: '' }, entrega = { texto: '', aprovada: false };
-  let versaoAgente = 1, versaoSkills = 1, versaoTom = 1, versaoFollowup = 1, versaoEntrega = 1;
+  let skills: ConfiguracaoSkillsAgente = structuredClone(SKILLS_AGENTE_PADRAO), tom: TomAgente = structuredClone(TOM_AGENTE_PADRAO), followup: ConfiguracaoFollowup = { habilitado: false, minutos: 60, texto: '' }, entrega = { texto: '', aprovada: false }, prompt = structuredClone(PROMPT_CENTRAL_PADRAO);
+  let versaoAgente = 1, versaoSkills = 1, versaoTom = 1, versaoFollowup = 1, versaoEntrega = 1, versaoPrompt = 0;
   const estadoAgente = () => ({ ...configuracaoAgente, provedor: configuracaoAgente.provedor ?? 'anthropic', versao: versaoAgente, moedaOrcamento: 'USD', inferenciaHabilitada: false, credenciais: { anthropic: false, woo: false, voz: false }, enviosReais: false, prontoParaLigar: false, pendencias: ['Ambiente fictício: a Donatella não chama a IA, não consulta o site e não envia mensagens.'], estadoEfetivo: 'desligada', enviosHumanosHabilitados: false, idioma: 'pt-BR', fusoHorario: 'America/Sao_Paulo', horario: null, controle: { habilitada: false, ativadaEm: null }, teste: { disponivel: true, pendencias: [], limiteTotalCentavos: 0, reservadoCentavos: 0 } });
 
   /** "Testar pergunta" sem IA: mostra o assunto e as fontes que a Donatella
    * receberia, seguindo a mesma escolha de fonte por assunto. */
-  async function simularTeste(pergunta: string) {
-    const tema = temaPergunta(pergunta), ferramenta = FERRAMENTA_POR_TEMA[tema];
+  const produtoHubFicticio = (p: ProdutoFicticio): ProdutoHubLeitura => ({ id: p.id, nome: p.nome, especificacao: p.especificacao, sku: null, versao: '1', wooProdutoId: null, wooVariacaoId: null, consultadoEm: agora().toISOString() });
+  const produtoComercialFicticio = (p: ProdutoFicticio): ProdutoComercial => {
+    const consultadoEm = agora().toISOString();
+    return { hubId: p.id, nome: p.nome, especificacao: p.especificacao, motivo: 'Informações do HUB: ' + p.especificacao, fonteHub: { id: p.id, versao: '1', consultadoEm }, vinculo: { estado: 'confirmado', motivo: null },
+      oferta: { produtoId: catalogo.indexOf(p) + 1, variacaoId: null, sku: 'DEMO-' + p.slug.toUpperCase(), url: p.url ?? `${site}/produto/${p.slug}`, imagemUrl: null, tipo: 'simples', preco: { moeda: 'BRL', valor: p.preco, tipo: 'fixo' }, compravel: true, disponibilidade: 'à venda no site de exemplo', consultadoEm } };
+  };
+
+  const produtosFicticios = async (busca: string, composicoes: () => Promise<readonly string[]>): Promise<ProdutoComercial[]> => {
+    const todos = catalogo.map(produtoHubFicticio);
+    return (await escolherCatalogo(busca, async () => todos, composicoes)).map(({ produto, grupo }) => ({ ...produtoComercialFicticio(catalogo.find(f => f.id === produto.id)!), ...(grupo ? { grupo } : {}) }));
+  };
+
+  async function simularTeste(entrada: string) {
+    // Cada linha conta como uma mensagem do cliente; a última é a que ela responde.
+    const linhas = entrada.split('\n').map(l => l.trim()).filter(Boolean), pergunta = linhas.at(-1) ?? entrada.trim();
+    let tema: TemaIA | null = null;
+    let motivoEquipe: MotivoVendaEquipe | undefined;
+    linhas.forEach((linha, i) => { const c = classificarNaConversa(linha, tema, estadoVenda(linhas.slice(0, i))); tema = c.tema; motivoEquipe = c.motivoEquipe; });
+    tema ??= temaPergunta(pergunta);
+    const ferramenta = FERRAMENTA_POR_TEMA[tema];
     const base = { provedor: 'anthropic', modelo: 'simulacao-local', versao: versaoAgente, enviosReais: false, reservaCentavos: 0 };
-    const aviso = `Simulação local: nenhuma IA foi chamada e nada foi enviado. Assunto identificado: ${tema}.`;
+    const conversaTexto = linhas.length > 1 ? ` Conversa de ${linhas.length} mensagens; respondendo à última.` : '';
+    const aviso = `Simulação local: nenhuma IA foi chamada e nada foi enviado. Assunto identificado: ${tema}.${conversaTexto}`;
     const apoio = (motivo: string) => ({ ...base, estado: 'apoio', texto: `${aviso} ${motivo} A Donatella pediria apoio à equipe.`, motivo, fontes: [] });
-    if (tema === 'alergia' || tema === 'excecao') return apoio('Este assunto é sempre tratado pela equipe.');
+    const jaComEquipe = !!motivoEquipe && estadoVenda(linhas.slice(0, -1)).motivo === motivoEquipe;
+    const porQue: Record<MotivoVendaEquipe, string> = { PEDIDO_CORPORATIVO: 'Pedido corporativo vai para um atendente.', DIFICULDADE_NO_SITE: 'O cliente não conseguiu pedir pelo site: vai para um atendente.', ORCAMENTO: 'O cliente mandou os dados do orçamento: vai para um atendente.' };
+    if (tema === 'alergia' || tema === 'excecao') return apoio(!motivoEquipe ? 'Este assunto é sempre tratado pela equipe.' : jaComEquipe ? 'A venda já está com a equipe.' : porQue[motivoEquipe]);
     if (!skillPermiteAgente(skills, tema, ferramenta ?? 'consultar_conhecimento') && !(tema === 'produto' && skillPermiteAgente(skills, 'produto', 'consultar_conhecimento'))) return apoio('A habilidade deste assunto está desligada em Habilidades.');
     if (ferramenta === 'delivery_conditions') {
       if (!entrega.aprovada) return apoio('As condições de entrega ainda não foram aprovadas.');
       return { ...base, estado: 'concluido', texto: `${aviso} A Donatella usaria as condições de entrega aprovadas:\n\n${entrega.texto}`, fontes: [{ id: 'condicoes-entrega', versao: versaoEntrega }] };
     }
-    if (ferramenta && tema !== 'produto') return apoio(`A resposta depende de consulta ao site (${ferramenta}), que o ambiente fictício não faz.`);
-    const fontes = await duvidas.consultarConhecimentoRelevante(ator, { empresaId: EMPRESA_FICTICIA, tema, pergunta, limite: 10 });
-    if (!fontes.length) return apoio('Nenhuma fonte aprovada e vigente combina com a pergunta.');
-    const lista = fontes.map((f, i) => `${i + 1}. ${f.pergunta.slice(0, 200)} — ${f.conteudo.slice(0, 400)}`).join('\n');
-    const produto = tema === 'produto' ? ' Em produção, ela também consultaria o catálogo do site.' : '';
-    return { ...base, estado: 'concluido', texto: `${aviso}${produto} Fontes aprovadas que iriam para o modelo, da mais para a menos relevante:\n${lista}`.slice(0, 7900), fontes: fontes.map(f => ({ id: f.id, versao: f.versao })) };
+    if (ferramenta && ferramenta !== 'search_products') return apoio(`A resposta depende de consulta ao site (${ferramenta}), que o ambiente fictício não faz.`);
+    // Mesmo caminho da agente: busca, teto de caracteres e, em produto, só o que não cita preço, estoque ou prazo.
+    const conhecimentoPermitido = skillPermiteAgente(skills, tema, 'consultar_conhecimento');
+    const relevantes = !ferramenta || tema === 'produto' && conhecimentoPermitido ? selecionarFontesParaModelo(await duvidas.consultarConhecimentoRelevante(ator, { empresaId: EMPRESA_FICTICIA, tema, pergunta, limite: FONTES_PARA_MODELO.maximo })) : [];
+    const conhecimento = ferramenta ? relevantes.filter(f => !CONTEUDO_COMERCIAL_MUTAVEL.test(f.conteudo)) : relevantes;
+    // Catálogo fictício pela mesma escolha do HUB e o mesmo texto de fonte da operação.
+    const busca = linhas.slice(-5).join(' ').slice(-1000);
+    const produtos = ferramenta ? await produtosFicticios(busca, async () => relevantes.map(f => f.conteudo)) : [];
+    const composicao = produtos[0]?.grupo?.tipo === 'composicao' ? produtos[0].grupo : null;
+    const tarefa: TarefaIA = { id: 'simulacao-local', atorId: identidade.id, empresaId: EMPRESA_FICTICIA, conversaId: 'ensaio-ficticio', clienteId: 'cliente-ficticio', versao: 1, mensagemOrigemId: 'ensaio-ficticio', pergunta, tema };
+    const atuais = ferramenta ? [...fontesProdutosComerciais(tarefa, produtos, agora().getTime()), fonteSiteOficial(tarefa, site, agora().getTime())] : [];
+    if (!atuais.length && !conhecimento.length) return apoio('Nenhuma fonte aprovada e vigente serve para a pergunta.');
+    const quantidade = ferramenta ? quantidadeComercial(busca) : null;
+    const vendas = skills.skills.find(s => s.habilitada && s.escopo.includes(tema!) && s.id === SKILL_CONSULTORA_VENDAS.id);
+    const partes = [aviso];
+    if (pedidoOrcamento(pergunta)) partes.push('Pedido de orçamento: ela solicita os dados, e a próxima mensagem com eles vai para um atendente.');
+    if (quantidade) partes.push(`Quantidade entendida: ${quantidade} pessoas.`);
+    if (composicao) partes.push(`Nenhuma opção única atende o grupo: ela sugere a composição de referência para ${composicao.pessoas} pessoas.`);
+    else if (produtos[0]?.grupo) partes.push('Nenhuma opção exata para o grupo: ela sugere as mais próximas.');
+    if (ferramenta) partes.push(produtos.length ? `Produtos do catálogo de exemplo que iriam para o modelo:\n${produtos.map((p, i) => `${i + 1}. ${p.grupo?.tipo === 'composicao' ? `${p.grupo.quantidade}× ` : ''}${p.nome} — ${p.oferta?.preco ? `R$ ${p.oferta.preco.valor.replace('.', ',')}` : 'sem preço'} — ${p.oferta?.url ?? 'sem link'}`).join('\n')}` : `Nenhum produto do catálogo de exemplo serve: ela indicaria o site, ${site}.`);
+    if (conhecimento.length) partes.push(`${ferramenta ? 'Orientações do conhecimento' : 'Fontes aprovadas que iriam para o modelo'}, da mais para a menos relevante:\n${conhecimento.map((f, i) => `${i + 1}. ${f.pergunta.slice(0, 200)} — ${f.conteudo.slice(0, 300)}`).join('\n')}`);
+    if (vendas) partes.push(`Habilidade ativa: ${vendas.nome}. Ela pergunta só o que falta (ocasião, pessoas, preferências), uma coisa por vez, sugere até três opções com nome, preço e link e orienta a fazer o pedido pelo site.`);
+    const fontes = [...atuais, ...conhecimento];
+    return { ...base, estado: 'concluido', texto: partes.join('\n\n').slice(0, 7900), fontes: fontes.map(f => ({ id: f.id, versao: f.versao })) };
   }
+
+  // Conversa de teste: as mesmas fontes do simulador, agora entregues ao modelo.
+  const conversaIA = criarConversaIA({
+    ia: o.ia, catalogoLocal: !!o.catalogo, empresaId: EMPRESA_FICTICIA, atorId: identidade.id, maxTokens: configuracaoAgente.maxTokens, limites: configuracaoAgente.limites, modeloPadrao: () => configuracaoAgente.modelo, esforco: () => configuracaoAgente.esforco,
+    configuracao: () => ({ skills, tom, prompt }),
+    async conhecimento(t) {
+      const fonte = (id: string, versao: number, fim: number, conteudo: string, titulo: string): FonteIA & { titulo: string } => ({ id, versao, empresaId: t.empresaId, clienteId: t.clienteId, tema: t.tema, origem: 'conhecimento', estado: 'aprovado', inicio: 0, fim, conteudo, titulo });
+      const fontes = selecionarFontesParaModelo(await duvidas.consultarConhecimentoRelevante(ator, { empresaId: EMPRESA_FICTICIA, tema: t.tema, pergunta: t.pergunta, limite: FONTES_PARA_MODELO.maximo })).map(f => fonte(f.id, f.versao, Date.parse(f.vigenteAte), f.conteudo, f.pergunta));
+      // Mesma saudação da operação, para "oi" não depender de fonte cadastrada.
+      if (t.tema === 'procedimento' && /^(ol[aá]|oi|bom dia|boa tarde|boa noite|obrigad[oa])(?:[!.,\s]*)$/i.test(t.pergunta.trim())) fontes.push(fonte('donatella_saudacao_v1', 1, Date.now() + 60000, 'Olá! Sou a Donatella, assistente da Grazing Table & Co. Como posso ajudar você hoje?', 'Saudação'));
+      return fontes;
+    },
+    async ferramenta(nome: FerramentaIA, t: TarefaIA, mensagensCliente: string[]) {
+      const instante = Date.now();
+      if (nome === 'search_products') {
+        const busca = [...mensagensCliente.slice(-4).map(m => m.slice(0, 180)), t.pergunta].join(' ').slice(-1000);
+        const produtos = await produtosFicticios(busca, async () => (await duvidas.consultarConhecimentoRelevante(ator, { empresaId: EMPRESA_FICTICIA, tema: t.tema, pergunta: t.pergunta, limite: FONTES_PARA_MODELO.maximo })).map(f => f.conteudo));
+        return [...fontesProdutosComerciais(t, produtos, instante, podeSugerirProdutos(busca, produtos)).map((f, i) => ({ ...f, titulo: produtos[i].nome })), { ...fonteSiteOficial(t, site, instante), titulo: 'Site oficial' }];
+      }
+      if (nome === 'delivery_conditions' && entrega.aprovada) return [{ id: 'condicoes_entrega', versao: versaoEntrega, empresaId: t.empresaId, clienteId: t.clienteId, tema: t.tema, origem: 'ferramenta' as const, estado: 'aprovado' as const, inicio: instante, fim: instante + 60000, conteudo: entrega.texto, titulo: 'Condições de entrega' }];
+      return [];
+    },
+  });
 
   const agente = {
     duvidas: () => duvidas,
     async estado() { return estadoAgente(); },
-    async opcoes() { return { principal: 'anthropic', provedores: [{ id: 'anthropic', nome: 'Anthropic', configurado: false, disponivel: false, testado: false, modelos: [{ id: configuracaoAgente.modelo, nome: configuracaoAgente.modelo, disponivel: false, testado: false }] }] }; },
+    // Com a chave do teste de conversa, os modelos daquela página ficam escolhíveis; o escolhido vira o padrão dela.
+    async opcoes() {
+      const ids = o.ia ? MODELOS_CONVERSA.map(m => m.id) : [configuracaoAgente.modelo], vazio = { configurado: false, disponivel: false, testado: false, modelos: [] };
+      return { principal: 'anthropic', provedores: [
+        { id: 'anthropic', nome: 'Anthropic', configurado: !!o.ia, disponivel: !!o.ia, testado: false, modelos: ids.map(id => ({ id, nome: id, disponivel: !!o.ia, testado: false })) },
+        { id: 'google', nome: 'Google', ...vazio }, { id: 'openai', nome: 'OpenAI', ...vazio },
+      ] };
+    },
     async configurar(_i: IdentidadeOperacao, p: { conteudo: ConfiguracaoAgente; versao: number }) {
       conferir(versaoAgente, p.versao); validarConfiguracaoAgente(p.conteudo);
       if ((p.conteudo.modo === 'automatico') !== (configuracaoAgente.modo === 'automatico')) falha('AGENTE_USE_CONTROLE_LIGAR_PAUSAR');
@@ -133,6 +214,8 @@ export async function criarApiFicticia(o: { agora?: () => Date } = {}): Promise<
     async followup() { return { configuracao: { ...followup }, versao: versaoFollowup, origem: 'local' }; },
     async configurarFollowup(_i: IdentidadeOperacao, p: { conteudo: ConfiguracaoFollowup; versao: number }) { conferir(versaoFollowup, p.versao); validarConfiguracaoFollowup(p.conteudo); followup = { ...p.conteudo }; return { versao: ++versaoFollowup }; },
     async entrega() { return { versao: versaoEntrega, texto: entrega.texto, aprovada: entrega.aprovada }; },
+    async promptCentral() { return { texto: prompt.texto, versao: versaoPrompt }; },
+    async configurarPromptCentral(_i: IdentidadeOperacao, p: { texto: string; versao: number }) { const novo = { texto: typeof p.texto === 'string' ? p.texto.trim() : p.texto }; validarPromptCentralAgente(novo); conferir(versaoPrompt, p.versao); prompt = novo; return { versao: ++versaoPrompt }; },
     async configurarEntrega(_i: IdentidadeOperacao, p: { texto: string; aprovada: boolean; versao: number }) { validarCondicoesEntrega(p); conferir(versaoEntrega, p.versao); entrega = { texto: p.texto.trim(), aprovada: p.aprovada }; return { versao: ++versaoEntrega }; },
   };
   const extensao = criarExtensaoAgenteOperacional(agente as unknown as ServicoAgenteOperacional, EMPRESA_FICTICIA);
@@ -224,6 +307,7 @@ export async function criarApiFicticia(o: { agora?: () => Date } = {}): Promise<
   async function rotas(metodo: string, path: string, u: URL, p: Record<string, unknown> | undefined): Promise<unknown> {
     const corpo = p ?? {};
     if (metodo === 'GET') {
+      if (path === '/ficticio/conversa') return conversaIA.estado();
       if (path === '/sessao') return { usuario: { id: identidade.id, nome: identidade.nome, perfilId: identidade.perfilId, permissoes: identidade.permissoes }, csrf, modo: 'homologacao', escritasReais: false };
       if (path === '/status') return { modo: 'homologacao', enviosReais: false, receptor: 'ficticio', fila: { pendentes: 0, incertos: 0, falhas: 0 }, backup: { ultimoSucessoEm: null, falha: 'AMBIENTE_FICTICIO' }, agente: { modo: configuracaoAgente.modo, modelo: configuracaoAgente.modelo, disponivel: false }, woocommerce: null, meta: null, atualizadoEm: agora().toISOString(), importadoEm: null };
       if (path === '/configuracao') return configuracao;
@@ -252,6 +336,7 @@ export async function criarApiFicticia(o: { agora?: () => Date } = {}): Promise<
       if (rotaConversa[2] === 'acao') return acao(c, corpo);
       return lembrete(c, corpo);
     }
+    if (metodo === 'POST' && path === '/ficticio/conversa') return conversaIA.responder({ conversaId: corpo.conversaId, texto: corpo.texto, modelo: corpo.modelo });
     if (metodo === 'POST' && path === '/mensagens/envio') return enviarMensagem(corpo);
     if (metodo === 'PUT' && path === '/rascunho') { const c = conversa(corpo.conversaId); conferir(c.rascunho.versao, corpo.versao); c.rascunho = { texto: texto(corpo.texto, 4096, true), versao: c.rascunho.versao + 1 }; return { ...c.rascunho }; }
     if (metodo === 'PUT' && path === '/configuracao') { conferir(configuracao.versao, corpo.versao); if (corpo.enviosReais !== false || corpo.automacoes !== false) falha('FICTICIO_ENVIOS_REAIS_INVALIDOS'); const { idempotencia: _idempotencia, ...dados } = corpo; configuracao = { ...(dados as typeof configuracao), versao: configuracao.versao + 1 }; return { versao: configuracao.versao }; }
@@ -289,7 +374,7 @@ export async function criarApiFicticia(o: { agora?: () => Date } = {}): Promise<
         enviar(res, metodo === 'GET' ? 404 : 405, { erro: metodo === 'GET' ? 'ROTA_INDISPONIVEL' : 'METODO_RECUSADO' }); return true;
       } catch (e) {
         const codigo = e instanceof Error && /^[A-Z0-9_]{1,80}$/.test(e.message) ? e.message : 'OPERACAO_FALHOU';
-        enviar(res, codigo === 'FICTICIO_RECURSO_INDISPONIVEL' ? 400 : statusErroOperacao(codigo), { erro: codigo }); return true;
+        enviar(res, codigo.startsWith('FICTICIO_') ? 400 : statusErroOperacao(codigo), { erro: codigo }); return true;
       }
     },
     encerrar() { for (const r of sse) r.end(); sse.clear(); },
