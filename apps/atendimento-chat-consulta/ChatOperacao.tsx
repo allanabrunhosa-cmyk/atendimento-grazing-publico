@@ -138,7 +138,7 @@ export default function ChatOperacao({cliente=clientePadrao,telaInicial='chat'}:
  useEffect(()=>{
   if(acesso!=='permitido')return;let vivo=true,emCurso=false,pendente=false;let debounce:ReturnType<typeof setTimeout>|null=null;
   const atualizar=async()=>{if(!vivo||revogado.current||document.visibilityState==='hidden')return;if(emCurso){pendente=true;return;}emCurso=true;try{setRevisao(v=>v+1);if(atualRef.current&&!paginaEmCurso.current)await atualizarHistorico(atualRef.current);}finally{emCurso=false;if(pendente){pendente=false;agendar();}}};
-  const agendar=()=>{if(!debounce)debounce=setTimeout(()=>{debounce=null;void atualizar();},400);};
+  const agendar=()=>{if(!debounce)debounce=setTimeout(()=>{debounce=null;void atualizar();},150);};
   const conferirStatus=async()=>{if(!vivo||revogado.current||document.visibilityState==='hidden')return;try{const status=await cliente.status();if(vivo)setStatus(status);}catch(e){if(vivo)falhar(e);}};
   const desobservar=cliente.observarChat(novaMensagem=>{if(novaMensagem)avisarSom();agendar();},ativa=>{aoVivoRef.current=ativa;if(ativa)agendar();},falhar);
   void conferirStatus();const timer=setInterval(()=>{void conferirStatus();if(!aoVivoRef.current)agendar();},15000);
