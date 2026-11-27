@@ -6,6 +6,7 @@ import { FONTES_PARA_MODELO, selecionarFontesParaModelo } from './conhecimento-r
 import { criarRepositorioDuvidasPg } from './repositorio-duvidas-pg';
 import { contextoAtualIA, orquestrarIA, type FonteIA, type TarefaIA,type DecisaoIA,type FerramentaIA } from './ia-orquestrador';
 import { criarProvedorEvidenciasDireto } from './ia-orquestrador-direto';
+import { ORIENTACAO_COLETA_CORPORATIVA } from './encaminhamento-venda';
 import { RepositorioAgentePg, validarConfiguracaoAgente,hashTarefaAgente,hashConfiguracaoAgente,normalizarConfiguracaoAgente,validarSkillsAgente,validarTomAgente,validarPromptCentralAgente,SKILLS_AGENTE_PADRAO,TOM_AGENTE_PADRAO,skillPermiteAgente,perfilEstiloAgente,comporTextoAgente,invalidarConfiguracaoAgenteTx,type ConfiguracaoAgente,type ConfiguracaoSkillsAgente,type TomAgente,type ProvedorAgente,type PromptCentralAgente } from './repositorio-agente-pg';
 import { criarFerramentasWoo, criarLeituraFerramentas, criarVozDireta, type CredenciaisVoz, type CredenciaisWoo } from './operacao-ferramentas';
 import type { RepositorioOperacaoPg } from './operacao-repositorio-pg';
@@ -245,6 +246,8 @@ export class ServicoAgenteOperacional {
   return c.configuracao.modo!=='desligado'&&this.configuracaoAutorizada(c.configuracao);
  }
  private async conhecimento(t:TarefaIA):Promise<FonteIA[]> {
+  // Coleta corporativa: só a orientação fixa, para a resposta pedir os dados do evento e nada mais.
+  if(t.coletaCorporativa)return [{id:ORIENTACAO_COLETA_CORPORATIVA.id,versao:ORIENTACAO_COLETA_CORPORATIVA.versao,empresaId:t.empresaId,clienteId:t.clienteId,tema:t.tema,origem:'conhecimento',estado:'aprovado',inicio:0,fim:Date.now()+60000,conteudo:ORIENTACAO_COLETA_CORPORATIVA.conteudo}];
   const ator=atorDuvidas(IDENTIDADE_AGENTE,t.empresaId);
   // Uma consulta só, ordenada pelas palavras da pergunta; segue ao modelo o que couber no teto de caracteres.
   const encontrados=await this.duvidas(IDENTIDADE_AGENTE).consultarConhecimentoRelevante(ator,{empresaId:t.empresaId,tema:t.tema,pergunta:t.pergunta,clienteId:t.clienteId,conversaId:t.conversaId,limite:FONTES_PARA_MODELO.maximo});

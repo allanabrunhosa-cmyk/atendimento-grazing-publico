@@ -1,6 +1,6 @@
 import 'server-only';
 import {MOTIVO_RESPOSTA_REDIGIDA} from './ia-resposta-fundamentada';
-import {clienteInforma,dadosDeOrcamento,estadoVenda,motivoVendaEquipe,pedidoOrcamento,VENDA_LIVRE,type EstadoVenda,type MotivoVendaEquipe} from './encaminhamento-venda';
+import {clienteInforma,coletaCorporativa,dadosDeOrcamento,estadoVenda,motivoVendaEquipe,pedidoOrcamento,VENDA_LIVRE,type EstadoVenda,type MotivoVendaEquipe} from './encaminhamento-venda';
 import {SKILL_CONSULTORA_VENDAS} from './skill-consultora-vendas';
 import {possuiDadosPessoais} from './duvidas-aprendizagem';
 import { createHash, randomUUID } from 'node:crypto';
@@ -113,9 +113,13 @@ const MUDANCA_PEDIDO_FEITO = /\b(?:troc|mud|alter|corrig|cancel)[a-zà-ú]*\b[^.
 const NOVO_PEDIDO = /\b(?:fa[zç](?:er|o|endo)?|fa[cç]o)\s+(?:o\s+|um\s+|uma\s+|meu\s+|minha\s+)?(?:pedido|encomenda)\b|\b(?:novo|nova)\s+(?:pedido|encomenda)\b|\bencomend(?:ar|o)\b|\bquero\s+(?:pedir|encomendar)\b/iu;
 /** Ocasião, número de pessoas e preferência: respostas típicas da qualificação. */
 const QUALIFICACAO_PRODUTO = /anivers|casamento|noivado|\bch[aá]\s+de\s+(?:beb[eê]|panela|revela|cozinha)|confraterniza|happy hour|comemora|\bfesta|piquenique|celebra|formatura|batizado|convidad|vegetarian|vegan|sem carne|\bsomos\s+(?:\d{1,3}|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez)\b/iu;
+/** Alergia, reembolso, reclamação ou mudança de pedido já feito: vão para a
+ * equipe pelo próprio assunto, com ou sem venda na conversa. */
+const ALERGIA = /alerg|intoler|anafilax/i, RECLAMACAO = /reembol|estorno|desconto|cancelar pedido|reclama/i;
+const excecaoPropria = (pergunta: string) => ALERGIA.test(pergunta) || RECLAMACAO.test(pergunta) || MUDANCA_PEDIDO_FEITO.test(pergunta);
 export function temaPergunta(pergunta: string): TemaIA {
- if (/alerg|intoler|anafilax/i.test(pergunta)) return 'alergia';
- if (/reembol|estorno|desconto|cancelar pedido|reclama/i.test(pergunta) || MUDANCA_PEDIDO_FEITO.test(pergunta)) return 'excecao';
+ if (ALERGIA.test(pergunta)) return 'alergia';
+ if (excecaoPropria(pergunta)) return 'excecao';
  // O pedido é pelo site; corporativo e quem não consegue pelo site vão para a equipe.
  if (motivoVendaEquipe(pergunta)) return 'excecao';
  // Orçamento: o conhecimento aprovado traz os dados que a Donatella solicita.
@@ -144,17 +148,22 @@ const TEMAS_VENDA: readonly TemaIA[] = ['produto','preco','estoque'];
  * seguida ("são 80 pessoas") também vão para ela; o mesmo vale para os dados do
  * orçamento que ele pediu. */
 export function temaComContexto(pergunta: string, anterior: TemaIA | null, venda: EstadoVenda = VENDA_LIVRE): TemaIA {
+ // Primeiro contato corporativo: ela responde pedindo os dados do evento.
+ if (coletaCorporativa(pergunta, venda) && !excecaoPropria(pergunta)) return 'procedimento';
  const proprio = temaPergunta(pergunta);
  if (proprio !== 'alergia' && (venda.motivo && (TEMAS_VENDA.includes(proprio) || pedidoOrcamento(pergunta) || clienteInforma(pergunta)) || venda.aguardandoOrcamento && dadosDeOrcamento(pergunta))) return 'excecao';
  if (pedidoOrcamento(pergunta)) return proprio;
  if (proprio !== 'procedimento' || !anterior || !TEMAS_VENDA.includes(anterior) || ENCERRAMENTO.test(pergunta)) return proprio;
  return !pergunta.includes('?') || REFERENCIA_OPCOES.test(pergunta) || FECHAMENTO.test(pergunta) ? 'produto' : proprio;
 }
-/** Assunto e, quando a venda vai para a equipe, o motivo que ela vê no caso. */
-export function classificarNaConversa(pergunta: string, anterior: TemaIA | null, venda: EstadoVenda): { tema: TemaIA; motivoEquipe?: MotivoVendaEquipe } {
+/** Assunto e, quando a venda vai para a equipe, o motivo que ela vê no caso.
+ * No primeiro contato corporativo, `coletaCorporativa` faz a Donatella pedir os
+ * dados do evento; a resposta do cliente com eles vai para a equipe. */
+export function classificarNaConversa(pergunta: string, anterior: TemaIA | null, venda: EstadoVenda): { tema: TemaIA; motivoEquipe?: MotivoVendaEquipe; coletaCorporativa?: true } {
  const tema = temaComContexto(pergunta, anterior, venda);
+ if (tema === 'procedimento' && coletaCorporativa(pergunta, venda) && !excecaoPropria(pergunta)) return { tema, coletaCorporativa: true };
  if (tema !== 'excecao') return { tema };
- const motivo = motivoVendaEquipe(pergunta) ?? (temaPergunta(pergunta) === 'excecao' ? null : venda.motivo ?? (venda.aguardandoOrcamento ? 'ORCAMENTO' : null));
+ const motivo = motivoVendaEquipe(pergunta) ?? (temaPergunta(pergunta) === 'excecao' ? null : venda.motivo ?? (venda.aguardandoOrcamento ? (venda.corporativo ? 'PEDIDO_CORPORATIVO' : 'ORCAMENTO') : null));
  return motivo ? { tema, motivoEquipe: motivo } : { tema };
 }
 /** Assunto da tarefa anterior (últimas 6 horas) e situação da venda: pedido

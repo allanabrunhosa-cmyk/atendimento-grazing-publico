@@ -6,7 +6,7 @@ import { pessoasInformadas } from './pessoas-informadas';
 export type TemaIA = "produto" | "preco" | "estoque" | "frete" | "agenda" | "pedido" | "procedimento" | "alergia" | "excecao";
 export type ModoIA = "simulacao" | "rascunho" | "automatico";
 export type ContextoIA = { empresaId: string; conversaId: string; clienteId: string; versao: number; estado: "ia" | "humano" | "encerrada"; modo: ModoIA };
-export type TarefaIA = { id: string; atorId: string; empresaId: string; conversaId: string; clienteId: string; versao: number; mensagemOrigemId: string; pergunta: string; tema: TemaIA; /** Por que a venda foi para a equipe, quando o tema é excecao por causa dela. */ motivoEquipe?: MotivoVendaEquipe; pedidoId?: string; midia?: { tipo: "imagem" | "audio"; preservada: boolean; transcricaoConfiavel?: boolean } };
+export type TarefaIA = { id: string; atorId: string; empresaId: string; conversaId: string; clienteId: string; versao: number; mensagemOrigemId: string; pergunta: string; tema: TemaIA; /** Por que a venda foi para a equipe, quando o tema é excecao por causa dela. */ motivoEquipe?: MotivoVendaEquipe; /** Primeiro contato de pedido corporativo: ela pede os dados do evento antes da equipe. */ coletaCorporativa?: true; pedidoId?: string; midia?: { tipo: "imagem" | "audio"; preservada: boolean; transcricaoConfiavel?: boolean } };
 export type FonteIA = { id: string; versao: number; empresaId: string; clienteId?: string; tema: TemaIA; origem: "conhecimento" | "ferramenta"; estado: "aprovado" | "pendente" | "rejeitado" | "substituido"; inicio: number; fim: number; conteudo: string; chave?: string; valor?: string; /** Produto com anúncio conferido: o link que o cliente usa para pedir. */ compra?: { nome: string; url: string; preco?: string; quantidade?: number; referencia?: number; /** O cliente já disse o bastante para receber a sugestão. */ sugerir?: true } };
 export type FerramentaIA = "search_products" | "get_order" | "delivery_conditions" | "available_slots";
 export type ReferenciaFonteIA = { id: string; versao: number };
@@ -115,7 +115,9 @@ export async function orquestrarIA(t: TarefaIA, limites: LimitesIA, p: PortasIA)
   }
   const revisao = t.tema === "alergia" || /alerg|anafilax|intoler[aâ]ncia|reembol|estorno|desconto/i.test(t.pergunta);
   // Motivo próprio para a equipe saber por que a venda saiu do site.
-  const venda = revisao ? null : motivoVendaEquipe(t.pergunta) ?? (t.tema === "excecao" ? t.motivoEquipe : null);
+  // No primeiro contato corporativo ela responde pedindo os dados; não chama a equipe ainda.
+  const propria = motivoVendaEquipe(t.pergunta), coleta = propria === "PEDIDO_CORPORATIVO" && t.coletaCorporativa === true && t.tema === "procedimento";
+  const venda = revisao ? null : (coleta ? null : propria) ?? (t.tema === "excecao" ? t.motivoEquipe : null);
   if (revisao || venda || t.tema === "excecao") return apoio(venda ?? "REVISAO_HUMANA_OBRIGATORIA");
   if (t.midia && (!t.midia.preservada || t.midia.tipo === "audio" && !t.midia.transcricaoConfiavel)) return apoio("MIDIA_SEM_EVIDENCIA_CONFIAVEL");
   let fontes: FonteIA[];
