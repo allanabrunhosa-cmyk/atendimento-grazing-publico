@@ -10,9 +10,9 @@ const origem='https://atendimento.exemplo.invalid',usuario={id:'fixture-reconcil
 const body={tipo:'controle',pedido:{acao:'pausar',versao:3,idempotencia:'11111111-1111-4111-a111-111111111111'}};
 function req(path='/agente/reconciliar',p:unknown=body,headers:Record<string,string>={},method='POST'){return Object.assign(Readable.from([Buffer.from(JSON.stringify(p))]),{url:'/api/atendimento/operacao'+path,method,headers:{host:new URL(origem).host,origin:origem,'content-type':'application/json',...headers}}) as IncomingMessage;}
 function resposta(){const r={statusCode:0,bytes:'',setHeader:vi.fn(),writeHead(c:number){this.statusCode=c;},end(v?:string){this.bytes=v??'';}};return r as unknown as ServerResponse&{bytes:string};}
-function fixture(p:{sessao?:boolean;csrf?:boolean;acesso?:boolean;erro?:string;preparada?:boolean}={}){
+function fixture(p:{sessao?:boolean;csrf?:boolean;acesso?:boolean;erro?:string;falha?:unknown;preparada?:boolean}={}){
  const reconciliar=vi.fn(async()=>{if(p.erro)throw Error(p.erro);return {estado:'confirmada',versao:4};});
- const agente={duvidas:()=>({}),reconciliar,configurar:vi.fn(async()=>{if(p.erro)throw Error(p.erro);return {versao:4};})} as unknown as ServicoAgenteOperacional;
+ const agente={duvidas:()=>({}),reconciliar,configurar:vi.fn(async()=>{if(p.falha)throw p.falha;if(p.erro)throw Error(p.erro);return {versao:4};})} as unknown as ServicoAgenteOperacional;
  const repo={autorizar:async()=>p.acesso!==false} as unknown as RepositorioOperacaoPg;
  const registrarErroAgente=vi.fn();return {reconciliar,agente,registrarErroAgente,handler:criarHandlerOperacao({repo,entrada:{} as RepositorioEntradaPg,webhook:null,origem,somenteChatHumano:true,painelDonatellaPreparado:p.preparada!==false,registrarErroAgente,autenticar:async()=>p.sessao===false?null:usuario,conferirCsrf:async()=>p.csrf!==false,listarEquipe:async()=>({usuarios:[],equipes:[]}),extensao:criarExtensaoAgenteOperacional(agente,'grazing')})};
 }
@@ -24,4 +24,22 @@ describe('reconciliação do painel no HTTP',()=>{
  it('mantém o bloqueio de escrita quando o painel não está preparado',async()=>{const f=fixture({preparada:false}),r=resposta();await f.handler(req(),r);expect(r.statusCode).toBe(403);expect(f.reconciliar).not.toHaveBeenCalled();});
  it.each([['AGENTE_USE_CONTROLE_LIGAR_PAUSAR',409],['AGENTE_NAO_PRONTO_PARA_LIGAR',409],['AGENTE_CONFIGURACAO_NAO_AUTORIZADA',400],['AGENTE_ORCAMENTO_NAO_AUTORIZADO',409],['AGENTE_TESTE_CONSUMO_NAO_AUTORIZADO',409],['AGENTE_TESTE_ORCAMENTO_ESGOTADO',409]])('recusa de domínio %s não vira gravação incerta',async(codigo,status)=>{const f=fixture({erro:String(codigo)}),r=resposta();await f.handler(req('/agente/configurar',{conteudo:{},versao:1,idempotencia:'fixture'}),r);expect(r.statusCode).toBe(status);expect(JSON.parse(r.bytes).erro).toBe(codigo);});
  it.each([['AGENTE_USE_CONTROLE_LIGAR_PAUSAR',409,'AGENTE_USE_CONTROLE_LIGAR_PAUSAR'],['SEGREDO_PRIVADO_NAO_EXIBIR',503,'OPERACAO_FALHOU'],['SQL com nome e token privado',503,'OPERACAO_FALHOU']])('registra apenas referência, rota fixa e código permitido para %s',async(erro,status,codigo)=>{const f=fixture({erro}),r=resposta();await f.handler(req('/agente/configurar?segredo=nunca',{conteudo:{mensagem:'dado privado'},versao:1,idempotencia:'fixture'}),r);const registro=f.registrarErroAgente.mock.calls[0][0];expect(r.statusCode).toBe(status);expect(registro).toEqual({referencia:JSON.parse(r.bytes).referencia,rota:'/agente/configurar',status,codigo,horario:expect.stringMatching(/^\d{4}-\d\d-\d\dT/)});expect(JSON.stringify(registro)).not.toMatch(/dado privado|segredo=|SEGREDO_PRIVADO|SQL com|fixture/);});
+ it('falha sem código registra só SQLSTATE, tipo e falha de conexão conhecida',async()=>{
+  const erro=vi.spyOn(console,'error').mockImplementation(()=>undefined);
+  try{
+   const casos:[unknown,Record<string,unknown>][]=[
+    [Object.assign(Error('too many connections for role "papel_privado"'),{code:'53300'}),{tipo:'Error',sqlstate:'53300',conexao:null}],
+    [Error('timeout exceeded when trying to connect'),{tipo:'Error',sqlstate:null,conexao:'timeout exceeded when trying to connect'}],
+    [Error('SQL com nome e token privado'),{tipo:'Error',sqlstate:null,conexao:null}],
+   ];
+   for(const [falha,esperado] of casos){
+    const f=fixture({falha}),r=resposta();erro.mockClear();
+    await f.handler(req('/agente/configurar?segredo=nunca',{conteudo:{mensagem:'dado privado'},versao:1,idempotencia:'fixture'}),r);
+    expect(r.statusCode).toBe(503);
+    const linhas=erro.mock.calls.map(c=>String(c[0])).filter(l=>l.includes('operacao_falha'));expect(linhas).toHaveLength(1);
+    expect(JSON.parse(linhas[0])).toEqual({evento:'operacao_falha',referencia:JSON.parse(r.bytes).referencia,rota:'/agente/configurar',metodo:'POST',...esperado,horario:expect.stringMatching(/^\d{4}-/)});
+    expect(linhas[0]).not.toMatch(/papel_privado|dado privado|segredo|SQL com|fixture/);
+   }
+  }finally{erro.mockRestore();}
+ });
 });

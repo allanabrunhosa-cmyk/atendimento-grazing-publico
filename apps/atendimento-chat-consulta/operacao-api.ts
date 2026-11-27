@@ -115,18 +115,47 @@ const textoVazio=(v:unknown,max:number)=>{if(typeof v!=='string'||v.length>max)t
 function contato(v:unknown):ContatoOperacao{const c=objeto(v);return {id:texto(c.id,128),nome:texto(c.nome,200),telefone:nulo(c.telefone,100),email:nulo(c.email,254),hubClienteId:nulo(c.hubClienteId,128),tags:textos(c.tags,30,60),descricao:textoVazio(c.descricao??'',200),classificacao:c.classificacao==='cliente'||c.hubClienteId?'cliente':'lead',notas:textoVazio(c.notas??'',8000),versao:inteiro(c.versao??1),conversaId:c.conversaId===undefined?null:nulo(c.conversaId,128),canal:c.canal===undefined?undefined:canal(c.canal)};}
 function conversa(v:unknown):ConversaOperacao{const d=objeto(v),estado=texto(d.estado,30);if(!['ia','humano','pausado','encerrada'].includes(estado)||!Array.isArray(d.tags)||d.tags.length>30)throw new ErroOperacao('INVALIDO');return {lembrete:lembreteFollowup(d.lembrete),id:texto(d.id,128),contatoId:texto(d.contatoId,128),nome:texto(d.nome,500),telefone:nulo(d.telefone,100),descricao:d.descricao===undefined?'':textoVazio(d.descricao,200),classificacao:d.classificacao==='cliente'?'cliente':'lead',canal:d.canal===undefined?'nao_identificado':canal(d.canal),estado:estado as ConversaOperacao['estado'],ultimaMensagem:d.ultimaMensagem===undefined?null:nulo(d.ultimaMensagem,280),ultimaMensagemTipo:d.ultimaMensagemTipo===undefined?null:nulo(d.ultimaMensagemTipo,60),pendentesResposta:d.pendentesResposta===undefined?undefined:inteiro(d.pendentesResposta),naoLidas:d.naoLidas===undefined?undefined:inteiro(d.naoLidas),responsavelId:nulo(d.responsavelId,128),equipeId:nulo(d.equipeId,128),tags:d.tags.map(t=>texto(t,60)),versao:inteiro(d.versao),ultimaMensagemEm:nulo(d.ultimaMensagemEm,64),janelaRespostaAberta:d.janelaRespostaAberta===undefined?undefined:booleano(d.janelaRespostaAberta),ficticia:booleano(d.ficticia),somenteLeitura:booleano(d.somenteLeitura)};}
 
+/** Lê o código de erro de uma resposta curta do servidor. Corpo grande ou inválido vira código vazio. */
+async function codigoErroResposta(resposta:Response){const leitor=resposta.body?.getReader();let codigo='';if(leitor){try{const partes:Uint8Array[]=[];let tamanho=0;for(;;){const p=await leitor.read();if(p.done)break;tamanho+=p.value.byteLength;if(tamanho>2048){await leitor.cancel();break;}partes.push(p.value);}if(tamanho<=2048){const bytes=new Uint8Array(tamanho);let o=0;for(const p of partes){bytes.set(p,o);o+=p.byteLength;}codigo=String(objeto(JSON.parse(new TextDecoder().decode(bytes))).erro||'');}}catch{codigo='';}finally{leitor.releaseLock();}}return codigo;}
+/** O servidor atende poucos pedidos ao mesmo tempo e recusa o excedente com 503.
+ * A tela manda no máximo três por vez. Envio de anexo e teste da Donatella, que
+ * demoram, ficam fora da fila. Uma leitura recusada por sobrecarga é repetida até
+ * duas vezes; escrita nunca se repete sozinha. */
+const PEDIDOS_SIMULTANEOS=3,ESPERAS_LEITURA=[300,900],FORA_DA_FILA=new Set(['/anexos','/agente/testar']),RECUSA_PASSAGEIRA=new Set(['OPERACAO_FALHOU','SERVICO_OCUPADO']);
+class LeituraRecusada extends ErroOperacao{constructor(){super('INDISPONIVEL',503);}}
+const abortado=()=>new DOMException('This operation was aborted','AbortError');
+function esperar(ms:number,signal?:AbortSignal){return new Promise<void>((ok,falha)=>{if(signal?.aborted){falha(abortado());return;}function parar(){clearTimeout(t);falha(abortado());}const t=setTimeout(()=>{signal?.removeEventListener('abort',parar);ok();},ms);signal?.addEventListener('abort',parar,{once:true});});}
+
 /** Somente URLs próprias. Credenciais externas não fazem parte do contrato web.
  * A resposta da escrita só confirma o estado persistido, nunca entrega Meta. */
 export function criarClienteOperacao(buscar:typeof fetch=fetch,ambiente:'operacao'|'ensaio'=typeof location!=='undefined'&&new URLSearchParams(location.search).get('ambiente')==='ensaio'?'ensaio':'operacao'){
  let csrf='';
+ let emAndamento=0;const fila:(()=>void)[]=[];
+ function vez(signal?:AbortSignal){
+  if(signal?.aborted)return Promise.reject(abortado());
+  if(emAndamento<PEDIDOS_SIMULTANEOS){emAndamento++;return Promise.resolve();}
+  return new Promise<void>((ok,falha)=>{function chegou(){signal?.removeEventListener('abort',desistiu);ok();}function desistiu(){const i=fila.indexOf(chegou);if(i>=0)fila.splice(i,1);falha(abortado());}fila.push(chegou);signal?.addEventListener('abort',desistiu,{once:true});});
+ }
+ // A vaga passa direto para o próximo da fila.
+ function liberar(){const proximo=fila.shift();if(proximo)proximo();else emAndamento--;}
  async function pedido(caminho:string,metodo='GET',dados?:unknown,signal?:AbortSignal){
+  if(FORA_DA_FILA.has(caminho))return pedidoUnico(caminho,metodo,dados,signal);
+  for(let tentativa=0;;tentativa++){
+   await vez(signal);
+   try{return await pedidoUnico(caminho,metodo,dados,signal);}
+   catch(e){if(!(e instanceof LeituraRecusada)||tentativa>=ESPERAS_LEITURA.length)throw e;}
+   finally{liberar();}
+   await esperar(ESPERAS_LEITURA[tentativa],signal);
+  }
+ }
+ async function pedidoUnico(caminho:string,metodo:string,dados?:unknown,signal?:AbortSignal){
   if(!caminho.startsWith('/')||caminho.includes('..')||caminho.startsWith('//'))throw new ErroOperacao('INVALIDO');
   if(metodo!=='GET'&&!csrf)throw new ErroOperacao('LOGIN');
   const c=new AbortController(),abortar=()=>c.abort(),timer=setTimeout(abortar,caminho==='/agente/testar'?65000:caminho==='/anexos'?60000:15000);if(signal?.aborted)abortar();else signal?.addEventListener('abort',abortar,{once:true});
   try{
    const cabecalhos:Record<string,string>={...(ambiente==='ensaio'?{'X-Atendimento-Ambiente':'ensaio'}:{}),...(metodo==='GET'?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf})};
    let resposta:Response;try{resposta=await buscar(base+caminho,{method:metodo,credentials:'same-origin',cache:'no-store',redirect:'error',signal:c.signal,headers:Object.keys(cabecalhos).length?cabecalhos:undefined,body:dados===undefined?undefined:JSON.stringify(dados)});}catch(e){if(signal?.aborted)throw e;throw new ErroOperacao(metodo==='GET'?'INDISPONIVEL':'RESULTADO_INCERTO');}
-   if(resposta.status===401){csrf='';throw new ErroOperacao('LOGIN',401);}if(resposta.status===403)throw new ErroOperacao('PERMISSAO',403);if(resposta.status===423)throw new ErroOperacao('BLOQUEADO',423);if(resposta.status===400||resposta.status===409){const leitorErro=resposta.body?.getReader();let codigo='';if(leitorErro){try{const partes:Uint8Array[]=[];let tamanho=0;for(;;){const p=await leitorErro.read();if(p.done)break;tamanho+=p.value.byteLength;if(tamanho>2048){await leitorErro.cancel();break;}partes.push(p.value);}if(tamanho<=2048){const bytes=new Uint8Array(tamanho);let o=0;for(const p of partes){bytes.set(p,o);o+=p.byteLength;}codigo=String(objeto(JSON.parse(new TextDecoder().decode(bytes))).erro||'');}}catch{codigo='';}finally{leitorErro.releaseLock();}}throw new ErroOperacao(codigo==='OPERACAO_ATALHO_NOME_CONFLITO'?'ATALHO_NOME':codigo==='OPERACAO_ATALHOS_LIMITE_INVALIDO'||codigo==='OPERACAO_ATALHOS_TAMANHO_INVALIDO'?'ATALHOS_LIMITE':codigo==='AGENTE_USE_CONTROLE_LIGAR_PAUSAR'?'AGENTE_CONTROLE':codigo==='AGENTE_NAO_PRONTO_PARA_LIGAR'?'AGENTE_PENDENTE':codigo==='OPERACAO_TEMPLATE_RESULTADO_INCERTO'?'RESULTADO_INCERTO':codigo==='OPERACAO_TEMPLATE_META_INVALIDO'?'TEMPLATE_META':codigo==='OPERACAO_TELEFONE_INVALIDO'?'TELEFONE':codigo==='OPERACAO_CITACAO_INDISPONIVEL'?'CITACAO':codigo==='OPERACAO_ASSUMIR_OBRIGATORIO'?'ASSUMIR':codigo==='OPERACAO_JANELA_FECHADA'?'JANELA':resposta.status===409?'CONFLITO':'INVALIDO',resposta.status);}if(!resposta.ok)throw new ErroOperacao(resposta.status>=500&&metodo!=='GET'?'RESULTADO_INCERTO':'INDISPONIVEL',resposta.status);
+   if(resposta.status===401){csrf='';throw new ErroOperacao('LOGIN',401);}if(resposta.status===403)throw new ErroOperacao('PERMISSAO',403);if(resposta.status===423)throw new ErroOperacao('BLOQUEADO',423);if(resposta.status===400||resposta.status===409){const codigo=await codigoErroResposta(resposta);throw new ErroOperacao(codigo==='OPERACAO_ATALHO_NOME_CONFLITO'?'ATALHO_NOME':codigo==='OPERACAO_ATALHOS_LIMITE_INVALIDO'||codigo==='OPERACAO_ATALHOS_TAMANHO_INVALIDO'?'ATALHOS_LIMITE':codigo==='AGENTE_USE_CONTROLE_LIGAR_PAUSAR'?'AGENTE_CONTROLE':codigo==='AGENTE_NAO_PRONTO_PARA_LIGAR'?'AGENTE_PENDENTE':codigo==='OPERACAO_TEMPLATE_RESULTADO_INCERTO'?'RESULTADO_INCERTO':codigo==='OPERACAO_TEMPLATE_META_INVALIDO'?'TEMPLATE_META':codigo==='OPERACAO_TELEFONE_INVALIDO'?'TELEFONE':codigo==='OPERACAO_CITACAO_INDISPONIVEL'?'CITACAO':codigo==='OPERACAO_ASSUMIR_OBRIGATORIO'?'ASSUMIR':codigo==='OPERACAO_JANELA_FECHADA'?'JANELA':resposta.status===409?'CONFLITO':'INVALIDO',resposta.status);}if(resposta.status===503&&metodo==='GET'&&RECUSA_PASSAGEIRA.has(await codigoErroResposta(resposta)))throw new LeituraRecusada();if(!resposta.ok)throw new ErroOperacao(resposta.status>=500&&metodo!=='GET'?'RESULTADO_INCERTO':'INDISPONIVEL',resposta.status);
    if(!resposta.headers.get('content-type')?.startsWith('application/json'))throw new ErroOperacao('INVALIDO');
    const leitor=resposta.body?.getReader();if(!leitor)throw new ErroOperacao('INVALIDO');const partes:Uint8Array[]=[];let tamanho=0;
    try{for(;;){const p=await leitor.read();if(p.done)break;tamanho+=p.value.byteLength;if(tamanho>1024*1024){await leitor.cancel();throw new ErroOperacao('INVALIDO');}partes.push(p.value);}}finally{leitor.releaseLock();}

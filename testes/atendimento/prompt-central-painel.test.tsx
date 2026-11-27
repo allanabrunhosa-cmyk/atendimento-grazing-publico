@@ -47,3 +47,19 @@ it('sem permissão de editar, mostra o prompt sem deixar mudar',async()=>{
  expect(f.campo.disabled).toBe(true);expect(f.campo.value).toBe('Base salva.');
  expect(screen.getByText('Editar exige a permissão de editar a IA no HUB.')).toBeTruthy();
 });
+
+it('leitura que falha mostra o motivo e deixa tentar de novo',async()=>{
+ let recusar=true;
+ const buscar=vi.fn<typeof fetch>(async u=>{const p=new URL(String(u),'https://ensaio.invalid').pathname.replace('/api/atendimento/operacao','');
+  if(p==='/sessao')return json({usuario:{id:'ficticio',nome:'Pessoa fictícia',perfilId:'ficticio',permissoes:['ia.visualizar','ia.editar']},csrf:'csrf-ficticio',modo:'homologacao',escritasReais:false});
+  if(p==='/agente/prompt'){if(recusar){recusar=false;return json({},503);}return json({versao:3,texto:'Base salva.'});}
+  throw Error('Endpoint de ensaio inexistente: '+p);
+ });
+ const cliente=criarClienteOperacao(buscar,'ensaio'),falhar=vi.fn(),sessao=await cliente.sessao() as SessaoOperacao;
+ render(<PromptCentralDonatella cliente={cliente} sessao={sessao} falhar={falhar} avisar={vi.fn()}/>);
+ expect(await screen.findByText('Não foi possível ler o prompt central agora.')).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'Tentar novamente'}));
+ expect((await screen.findByLabelText('Texto do prompt central') as HTMLTextAreaElement).value).toBe('Base salva.');
+ expect(screen.queryByRole('button',{name:'Tentar novamente'})).toBeNull();
+ expect(falhar).toHaveBeenCalledTimes(1);
+});
