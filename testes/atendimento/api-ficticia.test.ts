@@ -109,8 +109,10 @@ describe('API fictícia do painel', () => {
   it('pedido sempre pelo site: só corporativo e dificuldade no site vão para um atendente', async () => {
     const { versao } = await cliente.agente();
     const testar = (pergunta: string, n: number) => cliente.testarAgente({ pergunta, versao, idempotencia: `site-${n}` });
-    expect(await testar('Quero um orçamento para evento da empresa', 1)).toMatchObject({ estado: 'apoio', motivo: 'Pedido corporativo vai para um atendente.' });
-    expect(await testar('Quero algo para evento da empresa\nSão 80 pessoas', 2)).toMatchObject({ estado: 'apoio', motivo: 'A venda já está com a equipe.' });
+    expect(await testar('Quero um orçamento para evento da empresa', 1)).toMatchObject({ estado: 'concluido', texto: expect.stringContaining('Pedido corporativo: ela pede os dados do evento'), fontes: [{ id: 'donatella_coleta_corporativa_v1', versao: 1 }] });
+    expect(await testar('Quero algo para evento da empresa\nSão 80 pessoas, dia 10', 2)).toMatchObject({ estado: 'apoio', motivo: 'Pedido corporativo vai para um atendente.' });
+    expect(await testar('Coffee break para 40 pessoas dia 12/12', 7)).toMatchObject({ estado: 'apoio', motivo: 'Pedido corporativo vai para um atendente.' });
+    expect(await testar('Evento da empresa\nAna Exemplo, 40 pessoas, dia 12\nÉ em Pinheiros', 8)).toMatchObject({ estado: 'apoio', motivo: 'A venda já está com a equipe.' });
     expect(await testar('Quero uma tábua para 4\nNão consegui', 3)).toMatchObject({ estado: 'apoio', motivo: expect.stringContaining('não conseguiu pedir pelo site') });
     const aqui = await testar('Quero uma tábua para 4\nPrefiro fazer por aqui mesmo', 4);
     expect(aqui).toMatchObject({ estado: 'concluido', texto: expect.stringContaining('https://loja-exemplo.invalid/produto/tabua-exemplo-4') });

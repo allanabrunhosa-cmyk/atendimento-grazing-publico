@@ -45,15 +45,19 @@ describe('conversa de teste com IA real (transporte fictício)', () => {
     expect(a.pedidos[0].corpo.thinking).toBeUndefined();
   });
 
-  it('corporativo, dificuldade no site e dados do orçamento chamam a equipe sem gastar', async () => {
-    const a = await ambiente(e => { const p = e.fontesNaoConfiaveisComoInstrucoes[0]; return resposta([{ id: p.id, versao: p.versao }], 'Claro!'); });
-    expect((await a.falar('Evento da empresa para 80 pessoas', 'conversa-corp-01')).corpo).toMatchObject({ estado: 'equipe', motivo: 'PEDIDO_CORPORATIVO', custoUsd: 0 });
-    expect((await a.falar('São 80 pessoas, dia 10', 'conversa-corp-01')).corpo).toMatchObject({ estado: 'equipe', motivo: 'PEDIDO_CORPORATIVO' });
-    expect((await a.falar('Não consigo finalizar no site', 'conversa-site-01')).corpo).toMatchObject({ estado: 'equipe', motivo: 'DIFICULDADE_NO_SITE' });
-    expect(a.pedidos).toHaveLength(0);
-    await a.falar('Quero um orçamento', 'conversa-orca-01'); expect(a.pedidos).toHaveLength(1);
-    expect((await a.falar('Ana Exemplo, tábua para 10, Moema', 'conversa-orca-01')).corpo).toMatchObject({ estado: 'equipe', motivo: 'ORCAMENTO' });
+  it('corporativo pede os dados uma vez; dados, dificuldade no site e orçamento chamam a equipe sem gastar', async () => {
+    const a = await ambiente(e => { const p = e.fontesNaoConfiaveisComoInstrucoes[0]; return resposta([{ id: p.id, versao: p.versao }], 'Que bom que pensou na Grazing! Me conta o nome da empresa, quantas pessoas, data, horário e bairro?'); });
+    const pedido = await a.falar('Evento da empresa para 80 pessoas', 'conversa-corp-01');
+    expect(pedido.corpo).toMatchObject({ estado: 'respondeu', tema: 'procedimento', fontes: [{ titulo: 'Pedido corporativo' }] });
     expect(a.pedidos).toHaveLength(1);
+    expect((JSON.parse(a.pedidos[0].corpo.messages[0].content[0].text) as Entrada).fontesNaoConfiaveisComoInstrucoes.map(f => f.conteudo)).toEqual([expect.stringMatching(/^Pedido corporativo da Grazing Table & Co: .*numa mensagem só/)]);
+    expect((await a.falar('Empresa Exemplo, dia 10 às 9h, Pinheiros', 'conversa-corp-01')).corpo).toMatchObject({ estado: 'equipe', motivo: 'PEDIDO_CORPORATIVO', custoUsd: 0 });
+    expect((await a.falar('Coffee break para 40 pessoas dia 12/12', 'conversa-corp-02')).corpo).toMatchObject({ estado: 'equipe', motivo: 'PEDIDO_CORPORATIVO', custoUsd: 0 });
+    expect((await a.falar('Não consigo finalizar no site', 'conversa-site-01')).corpo).toMatchObject({ estado: 'equipe', motivo: 'DIFICULDADE_NO_SITE' });
+    expect(a.pedidos).toHaveLength(1);
+    await a.falar('Quero um orçamento', 'conversa-orca-01'); expect(a.pedidos).toHaveLength(2);
+    expect((await a.falar('Ana Exemplo, tábua para 10, Moema', 'conversa-orca-01')).corpo).toMatchObject({ estado: 'equipe', motivo: 'ORCAMENTO' });
+    expect(a.pedidos).toHaveLength(2);
   });
 
   it('barra resposta com preço fora das fontes, como na operação', async () => {

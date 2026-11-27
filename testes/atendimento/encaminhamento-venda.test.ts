@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
-import { estadoVenda, motivoVendaEquipe, pedidoOrcamento } from '../../src/lib/atendimento/encaminhamento-venda';
+import { dadosCorporativosCompletos, estadoVenda, motivoVendaEquipe, ORIENTACAO_COLETA_CORPORATIVA, pedidoOrcamento, VENDA_LIVRE } from '../../src/lib/atendimento/encaminhamento-venda';
 import { incluirLinksCompra, validarTextoRedigidoIA } from '../../src/lib/atendimento/ia-resposta-fundamentada';
 import { escolherProdutosHub, fonteSiteOficial, fontesProdutosComerciais, termosComerciais } from '../../src/lib/atendimento/operacao-comercial';
 import { classificarNaConversa, temaComContexto, temaPergunta } from '../../src/lib/atendimento/repositorio-agente-pg';
@@ -28,7 +28,7 @@ describe('quem vai para a equipe numa venda', () => {
     for (const p of ['Quero uma tábua para 4', 'Prefiro fazer por aqui mesmo', 'Posso pedir pelo WhatsApp?', 'Como faço um pedido?', 'Vocês entregam na minha empresa?', 'Quero mandar uma tábua para a empresa do meu marido', 'Pode entregar no meu escritório?', 'Qual o nome da empresa?', 'Qual o CNPJ de vocês?', 'Vocês emitem nota fiscal?', 'Não é para empresa', 'Não consigo escolher', 'Vocês não conseguem fazer para hoje?', 'Vocês não aceitam pix?', 'Quero incluir um cartão com mensagem', 'Não consigo encontrar opção vegetariana no site', 'Sem problema, pode ser pelo site', 'Não tem problema, compro no site', 'Confraternização com amigos', 'Festa com o pessoal da família']) expect(motivoVendaEquipe(p), p).toBeNull();
   });
   it('com a venda na equipe, o que o cliente manda depois não volta ao catálogo', () => {
-    const equipe = estadoVenda(['Evento da empresa']);
+    const equipe = estadoVenda(['Evento da empresa', 'Ana Exemplo, Empresa Exemplo, 80 pessoas']);
     expect(equipe).toEqual({ motivo: 'PEDIDO_CORPORATIVO', aguardandoOrcamento: false });
     expect(classificarNaConversa('São 80 pessoas, dia 10', 'excecao', equipe)).toEqual({ tema: 'excecao', motivoEquipe: 'PEDIDO_CORPORATIVO' });
     for (const p of ['Era a tábua para 4', 'Meu nome é Ana', 'Boa tarde, seria para o dia 12 de manhã', 'E o orçamento?']) expect(temaComContexto(p, 'excecao', equipe), p).toBe('excecao');
@@ -37,6 +37,36 @@ describe('quem vai para a equipe numa venda', () => {
     expect(classificarNaConversa('Tenho alergia a nozes', 'excecao', equipe)).toEqual({ tema: 'alergia' });
     expect(classificarNaConversa('Quero reembolso', 'excecao', equipe)).toEqual({ tema: 'excecao' });
     expect(temaComContexto('São 80 pessoas, dia 10', 'excecao')).toBe('produto');
+  });
+});
+
+describe('pedido corporativo: a Donatella pede os dados antes da equipe', () => {
+  const anuncio = 'Olá! Vi o anúncio da Grazing Table para eventos corporativos e gostaria de um orçamento.';
+  it('primeiro contato sem os dados recebe o pedido de dados, com a orientação fixa', () => {
+    for (const p of [anuncio, 'Quero um pedido corporativo', 'É para um evento da empresa', 'Vocês atendem empresas?', 'Coffee break para 30 pessoas', 'Quero presentear meus clientes']) {
+      expect(classificarNaConversa(p, null, VENDA_LIVRE), p).toEqual({ tema: 'procedimento', coletaCorporativa: true });
+      expect(estadoVenda([p]), p).toEqual({ motivo: null, aguardandoOrcamento: true, corporativo: true });
+    }
+    expect(ORIENTACAO_COLETA_CORPORATIVA.conteudo).toMatch(/numa mensagem só.*nome completo e nome da empresa, número de pessoas, data e horário do evento, bairro e cidade/);
+  });
+  it('a resposta com os dados vai para a equipe como corporativo; pergunta segue com ela', () => {
+    const espera = estadoVenda([anuncio]);
+    for (const p of ['Ana Exemplo, Empresa Exemplo, 40 pessoas, dia 12 às 9h, Pinheiros', 'Empresa Exemplo', 'Somos uma empresa de 50 funcionários']) expect(classificarNaConversa(p, 'procedimento', espera), p).toEqual({ tema: 'excecao', motivoEquipe: 'PEDIDO_CORPORATIVO' });
+    expect(classificarNaConversa('Vocês entregam em Osasco?', 'procedimento', espera)).toEqual({ tema: 'frete' });
+    expect(estadoVenda([anuncio, 'Vocês entregam em Osasco?'])).toEqual(espera);
+    expect(estadoVenda([anuncio, 'Ana Exemplo, 40 pessoas'])).toEqual({ motivo: 'PEDIDO_CORPORATIVO', aguardandoOrcamento: false });
+  });
+  it('quem já manda pessoas e data vai direto para a equipe', () => {
+    for (const p of ['Coffee break para 40 pessoas dia 12/12', 'Confraternização da empresa, 60 funcionários, 18 de dezembro', 'Evento corporativo amanhã para 25 pessoas']) {
+      expect(dadosCorporativosCompletos(p), p).toBe(true);
+      expect(classificarNaConversa(p, null, VENDA_LIVRE), p).toEqual({ tema: 'excecao', motivoEquipe: 'PEDIDO_CORPORATIVO' });
+    }
+    expect(dadosCorporativosCompletos('Evento da empresa para 80 pessoas')).toBe(false);
+  });
+  it('alergia, reembolso e quem já aguardava um orçamento comum não passam pela coleta', () => {
+    expect(classificarNaConversa('Evento da empresa, temos uma pessoa com alergia a nozes', null, VENDA_LIVRE)).toEqual({ tema: 'alergia' });
+    expect(classificarNaConversa('Quero reembolso do pedido da empresa', null, VENDA_LIVRE)).toEqual({ tema: 'excecao', motivoEquipe: 'PEDIDO_CORPORATIVO' });
+    expect(classificarNaConversa('É para a empresa', 'procedimento', estadoVenda(['Quero um orçamento']))).toEqual({ tema: 'excecao', motivoEquipe: 'PEDIDO_CORPORATIVO' });
   });
 });
 
@@ -142,6 +172,23 @@ describe('orquestrador', () => {
     expect(dados.r).toMatchObject({ estado: 'aguardando_apoio', motivo: 'ORCAMENTO' }); expect(dados.provedor).not.toHaveBeenCalled();
     expect((await ensaio({ ...tarefa, motivoEquipe: 'ORCAMENTO' })).r).toMatchObject({ estado: 'rascunho' });
     expect((await ensaio({ ...tarefa, pergunta: 'Quero um estorno', tema: 'excecao', motivoEquipe: 'ORCAMENTO' })).r).toMatchObject({ motivo: 'REVISAO_HUMANA_OBRIGATORIA' });
+  });
+  it('coleta corporativa: chama o modelo só com a orientação fixa e não abre caso', async () => {
+    const pergunta = 'Olá! Vi o anúncio para eventos corporativos e gostaria de um orçamento.';
+    const t: TarefaIA = { ...tarefa, pergunta, tema: 'procedimento', coletaCorporativa: true };
+    const fonte: FonteIA = { id: ORIENTACAO_COLETA_CORPORATIVA.id, versao: 1, empresaId: t.empresaId, clienteId: t.clienteId, tema: t.tema, origem: 'conhecimento', estado: 'aprovado', inicio: 0, fim: Date.now() + 60000, conteudo: ORIENTACAO_COLETA_CORPORATIVA.conteudo };
+    const contexto: ContextoIA = { ...t, estado: 'ia', modo: 'rascunho' }, motivos: string[] = [];
+    const provedor = vi.fn(async (pedido: { fontes: FonteIA[] }) => ({ selecoes: [{ id: pedido.fontes[0].id, versao: 1 }], pedirApoio: false, texto: 'Que bom que pensou na Grazing! Me conta o nome da empresa, quantas pessoas, a data, o horário e o bairro?' }));
+    const portas: PortasIA = {
+      respostaRedigida: true, autorizar: async () => true, conhecimento: async () => [fonte], ferramenta: async () => [], revalidarFontes: async () => true, provedor,
+      solicitarApoio: async (_t, motivo) => { motivos.push(motivo); return { id: 'apoio' }; },
+      repositorio: { contexto: async () => contexto, reservar: async () => ({ lease: 'lease' }), reservarChamada: async () => true, preservarApoio: async (_t, _l, d) => d, concluir: async (_t, _l, d) => d },
+    };
+    const limites = { maxChamadas: 2, custoPorChamadaCentavos: 50, maxCustoCentavos: 100, maxDuracaoMs: 5000, timeoutChamadaMs: 1500 };
+    expect(await orquestrarIA(t, limites, portas)).toMatchObject({ estado: 'rascunho', fontes: [{ id: 'donatella_coleta_corporativa_v1', versao: 1 }] });
+    expect(motivos).toEqual([]); expect(provedor.mock.calls[0][0].fontes.map(f => f.id)).toEqual(['donatella_coleta_corporativa_v1']);
+    // A marca não vale fora do primeiro contato: com o tema de exceção, a equipe assume.
+    expect(await orquestrarIA({ ...t, id: 'tarefa-site-2', tema: 'excecao' }, limites, portas)).toMatchObject({ estado: 'aguardando_apoio', motivo: 'PEDIDO_CORPORATIVO' });
   });
   it('alergia continua como revisão obrigatória, mesmo em pedido corporativo', async () => {
     const pergunta = 'Evento da empresa, temos uma pessoa com alergia a nozes';

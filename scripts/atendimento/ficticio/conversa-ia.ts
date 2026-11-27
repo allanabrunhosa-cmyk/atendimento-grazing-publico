@@ -68,8 +68,8 @@ export function criarConversaIA(d: Dependencias) {
     if (c.mensagens.length >= MAX_MENSAGENS) falha('FICTICIO_CONVERSA_LONGA');
     c.ocupada = true;
     try {
-      const { tema, motivoEquipe } = classificarNaConversa(texto, c.tema, estadoVenda(c.perguntas));
-      const tarefa: TarefaIA = { id: randomUUID(), atorId: d.atorId, empresaId: d.empresaId, conversaId: 'conversa-teste', clienteId: 'cliente-teste', versao: 1, mensagemOrigemId: 'mensagem-teste', pergunta: texto, tema, ...(motivoEquipe ? { motivoEquipe } : {}) };
+      const { tema, motivoEquipe, coletaCorporativa } = classificarNaConversa(texto, c.tema, estadoVenda(c.perguntas));
+      const tarefa: TarefaIA = { id: randomUUID(), atorId: d.atorId, empresaId: d.empresaId, conversaId: 'conversa-teste', clienteId: 'cliente-teste', versao: 1, mensagemOrigemId: 'mensagem-teste', pergunta: texto, tema, ...(motivoEquipe ? { motivoEquipe } : {}), ...(coletaCorporativa ? { coletaCorporativa } : {}) };
       const anteriores = [...c.mensagens], contextoRecente = [...anteriores, { autor: 'cliente' as const, texto }].slice(-20);
       c.tema = tema; c.perguntas.push(texto); c.mensagens.push({ autor: 'cliente', texto });
       let observado: ObservacaoConsumoIA | undefined, status: number | null = null, tipoErro: string | null = null, original = '', chamou = false;

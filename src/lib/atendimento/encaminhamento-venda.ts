@@ -1,10 +1,12 @@
 /** O pedido é sempre feito pelo cliente no site. A venda só vai para uma pessoa
  * se o pedido é corporativo, se o cliente não consegue pedir pelo site ou quando
  * ele manda os dados de um orçamento que pediu. Preferir o WhatsApp não é um
- * desses casos: a Donatella reforça o site e o link. */
+ * desses casos: a Donatella reforça o site e o link. No pedido corporativo ela
+ * primeiro pede os dados do evento; a equipe assume quando o cliente manda. */
 export type MotivoVendaEquipe = 'PEDIDO_CORPORATIVO' | 'DIFICULDADE_NO_SITE' | 'ORCAMENTO';
-/** Situação da venda nas mensagens anteriores que a equipe ainda não respondeu. */
-export type EstadoVenda = { motivo: MotivoVendaEquipe | null; aguardandoOrcamento: boolean };
+/** Situação da venda nas mensagens anteriores que a equipe ainda não respondeu.
+ * `corporativo` marca que os dados aguardados são de um pedido corporativo. */
+export type EstadoVenda = { motivo: MotivoVendaEquipe | null; aguardandoOrcamento: boolean; corporativo?: true };
 export const VENDA_LIVRE: EstadoVenda = { motivo: null, aguardandoOrcamento: false };
 
 const normalizar = (v: string) => v.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('pt-BR');
@@ -76,13 +78,35 @@ export function clienteInforma(pergunta: string): boolean {
 export function dadosDeOrcamento(pergunta: string): boolean {
   return clienteInforma(pergunta) && !pedidoOrcamento(pergunta) && !/\bsite\b/.test(normalizar(pergunta));
 }
+const GRUPO = /\b\d{1,4}\s*(?:pessoas?|convidad[oa]s?|funcionari[oa]s?|colaborador(?:es|as?)?|participantes?|pax)\b/;
+const MESES = 'janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro';
+const DATA = new RegExp(`\\b\\d{1,2}\\s*[/.-]\\s*\\d{1,2}\\b|\\bdia\\s+\\d{1,2}\\b|\\b\\d{1,2}\\s+de\\s+(?:${MESES})\\b|\\b(?:amanha|depois de amanha|semana que vem|proxima semana|(?:proxima|proximo|nesta|neste|nessa|nesse|essa|este|esse)\\s+(?:segunda|terca|quarta|quinta|sexta|sabado|domingo))\\b`);
+/** A mensagem já diz quantas pessoas e quando: a equipe assume sem novo pedido de dados. */
+export function dadosCorporativosCompletos(pergunta: string): boolean {
+  const texto = normalizar(pergunta);
+  return GRUPO.test(texto) && DATA.test(texto);
+}
+/** Primeiro contato de um pedido corporativo, sem os dados do evento: em vez de
+ * passar calada para a equipe, a Donatella pede os dados numa mensagem só. */
+export function coletaCorporativa(pergunta: string, venda: EstadoVenda): boolean {
+  return motivoVendaEquipe(pergunta) === 'PEDIDO_CORPORATIVO' && !venda.motivo && !venda.aguardandoOrcamento && !dadosCorporativosCompletos(pergunta);
+}
+/** Fonte fixa da resposta da coleta corporativa. É ela que o modelo usa para
+ * redigir o pedido de dados, sem preço, produto ou prazo. */
+export const ORIENTACAO_COLETA_CORPORATIVA = {
+  id: 'donatella_coleta_corporativa_v1',
+  versao: 1,
+  titulo: 'Pedido corporativo',
+  conteudo: 'Pedido corporativo da Grazing Table & Co: quem prepara o orçamento é a nossa equipe. Para isso, a Donatella agradece o contato e pede ao cliente, numa mensagem só, os dados que ele ainda não informou: nome completo e nome da empresa, número de pessoas, data e horário do evento, bairro e cidade, e o tipo de evento (por exemplo café da manhã, coffee break, almoço ou confraternização). Ela avisa que, com esses dados, a equipe continua o atendimento por aqui. Não sugere produto nem informa preço nesta resposta.',
+} as const;
 /** Percorre as mensagens do cliente, da mais antiga para a mais nova. */
 export function estadoVenda(anteriores: readonly string[]): EstadoVenda {
   return anteriores.reduce<EstadoVenda>((e, p) => {
+    if (coletaCorporativa(p, e)) return { motivo: null, aguardandoOrcamento: true, corporativo: true };
     const proprio = motivoVendaEquipe(p);
     if (proprio) return { motivo: proprio, aguardandoOrcamento: false };
     if (e.motivo) return e;
-    if (e.aguardandoOrcamento) return dadosDeOrcamento(p) ? { motivo: 'ORCAMENTO', aguardandoOrcamento: false } : e;
+    if (e.aguardandoOrcamento) return dadosDeOrcamento(p) ? { motivo: e.corporativo ? 'PEDIDO_CORPORATIVO' : 'ORCAMENTO', aguardandoOrcamento: false } : e;
     return pedidoOrcamento(p) ? { motivo: null, aguardandoOrcamento: true } : e;
   }, VENDA_LIVRE);
 }

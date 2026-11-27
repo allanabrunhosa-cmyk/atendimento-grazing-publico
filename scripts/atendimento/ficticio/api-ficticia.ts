@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { ServicoDuvidas, type AtorDuvidas } from '../../../src/lib/atendimento/duvidas-aprendizagem';
 import { criarExtensaoAgenteOperacional } from '../../../src/lib/atendimento/operacao-agente-http';
 import { validarCondicoesEntrega, type ServicoAgenteOperacional } from '../../../src/lib/atendimento/operacao-agente';
-import { estadoVenda, pedidoOrcamento, type MotivoVendaEquipe } from '../../../src/lib/atendimento/encaminhamento-venda';
+import { estadoVenda, ORIENTACAO_COLETA_CORPORATIVA, pedidoOrcamento, type MotivoVendaEquipe } from '../../../src/lib/atendimento/encaminhamento-venda';
 import { escolherCatalogo, fonteSiteOficial, fontesProdutosComerciais, podeSugerirProdutos, quantidadeComercial } from '../../../src/lib/atendimento/operacao-comercial';
 import type { ProdutoHubLeitura } from '../../../src/lib/atendimento/operacao-hub-produtos';
 import type { ProdutoComercial } from '../../../src/lib/atendimento/comercial-tipos';
@@ -118,8 +118,8 @@ export async function criarApiFicticia(o: { agora?: () => Date; ia?: IaFicticia;
     // Cada linha conta como uma mensagem do cliente; a última é a que ela responde.
     const linhas = entrada.split('\n').map(l => l.trim()).filter(Boolean), pergunta = linhas.at(-1) ?? entrada.trim();
     let tema: TemaIA | null = null;
-    let motivoEquipe: MotivoVendaEquipe | undefined;
-    linhas.forEach((linha, i) => { const c = classificarNaConversa(linha, tema, estadoVenda(linhas.slice(0, i))); tema = c.tema; motivoEquipe = c.motivoEquipe; });
+    let motivoEquipe: MotivoVendaEquipe | undefined, coletaCorporativa = false;
+    linhas.forEach((linha, i) => { const c = classificarNaConversa(linha, tema, estadoVenda(linhas.slice(0, i))); tema = c.tema; motivoEquipe = c.motivoEquipe; coletaCorporativa = c.coletaCorporativa === true; });
     tema ??= temaPergunta(pergunta);
     const ferramenta = FERRAMENTA_POR_TEMA[tema];
     const base = { provedor: 'anthropic', modelo: 'simulacao-local', versao: versaoAgente, enviosReais: false, reservaCentavos: 0 };
@@ -130,6 +130,7 @@ export async function criarApiFicticia(o: { agora?: () => Date; ia?: IaFicticia;
     const porQue: Record<MotivoVendaEquipe, string> = { PEDIDO_CORPORATIVO: 'Pedido corporativo vai para um atendente.', DIFICULDADE_NO_SITE: 'O cliente não conseguiu pedir pelo site: vai para um atendente.', ORCAMENTO: 'O cliente mandou os dados do orçamento: vai para um atendente.' };
     if (tema === 'alergia' || tema === 'excecao') return apoio(!motivoEquipe ? 'Este assunto é sempre tratado pela equipe.' : jaComEquipe ? 'A venda já está com a equipe.' : porQue[motivoEquipe]);
     if (!skillPermiteAgente(skills, tema, ferramenta ?? 'consultar_conhecimento') && !(tema === 'produto' && skillPermiteAgente(skills, 'produto', 'consultar_conhecimento'))) return apoio('A habilidade deste assunto está desligada em Habilidades.');
+    if (coletaCorporativa) return { ...base, estado: 'concluido', texto: `${aviso} Pedido corporativo: ela pede os dados do evento numa mensagem só, e a próxima mensagem com eles vai para um atendente. Orientação que iria para o modelo:\n\n${ORIENTACAO_COLETA_CORPORATIVA.conteudo}`, fontes: [{ id: ORIENTACAO_COLETA_CORPORATIVA.id, versao: ORIENTACAO_COLETA_CORPORATIVA.versao }] };
     if (ferramenta === 'delivery_conditions') {
       if (!entrega.aprovada) return apoio('As condições de entrega ainda não foram aprovadas.');
       return { ...base, estado: 'concluido', texto: `${aviso} A Donatella usaria as condições de entrega aprovadas:\n\n${entrega.texto}`, fontes: [{ id: 'condicoes-entrega', versao: versaoEntrega }] };
@@ -166,6 +167,8 @@ export async function criarApiFicticia(o: { agora?: () => Date; ia?: IaFicticia;
     configuracao: () => ({ skills, tom, prompt }),
     async conhecimento(t) {
       const fonte = (id: string, versao: number, fim: number, conteudo: string, titulo: string): FonteIA & { titulo: string } => ({ id, versao, empresaId: t.empresaId, clienteId: t.clienteId, tema: t.tema, origem: 'conhecimento', estado: 'aprovado', inicio: 0, fim, conteudo, titulo });
+      // Mesma orientação fixa da operação para pedir os dados do evento corporativo.
+      if (t.coletaCorporativa) return [fonte(ORIENTACAO_COLETA_CORPORATIVA.id, ORIENTACAO_COLETA_CORPORATIVA.versao, Date.now() + 60000, ORIENTACAO_COLETA_CORPORATIVA.conteudo, ORIENTACAO_COLETA_CORPORATIVA.titulo)];
       const fontes = selecionarFontesParaModelo(await duvidas.consultarConhecimentoRelevante(ator, { empresaId: EMPRESA_FICTICIA, tema: t.tema, pergunta: t.pergunta, limite: FONTES_PARA_MODELO.maximo })).map(f => fonte(f.id, f.versao, Date.parse(f.vigenteAte), f.conteudo, f.pergunta));
       // Mesma saudação da operação, para "oi" não depender de fonte cadastrada.
       if (t.tema === 'procedimento' && /^(ol[aá]|oi|bom dia|boa tarde|boa noite|obrigad[oa])(?:[!.,\s]*)$/i.test(t.pergunta.trim())) fontes.push(fonte('donatella_saudacao_v1', 1, Date.now() + 60000, 'Olá! Sou a Donatella, assistente da Grazing Table & Co. Como posso ajudar você hoje?', 'Saudação'));
