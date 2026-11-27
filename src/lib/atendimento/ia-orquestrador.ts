@@ -17,7 +17,8 @@ export type LimitesIA = { maxChamadas: number; custoPorChamadaCentavos: number; 
 export type RepositorioIA = {
   contexto: (tarefa: TarefaIA) => Promise<ContextoIA | null>;
   reservar: (tarefa: TarefaIA, agora: number, leaseMs: number) => Promise<{ lease: string; decisao?: DecisaoIA } | null>;
-  reservarChamada: (id: string, lease: string, limites: LimitesIA, agora: number) => Promise<boolean>;
+  /** `semCustoApi`: consulta a catálogo, pedido ou conhecimento. Conta na tarefa, mas não gasta o limite diário da API. */
+  reservarChamada: (id: string, lease: string, limites: LimitesIA, agora: number, semCustoApi?: boolean) => Promise<boolean>;
   preservarApoio: (tarefa: TarefaIA, lease: string, pendencia: PendenciaApoioIA, agora: number) => Promise<PendenciaApoioIA | null>;
   concluir: (tarefa: TarefaIA, lease: string, decisao: DecisaoIA, agora: number) => Promise<DecisaoIA | null>;
 };
@@ -96,10 +97,10 @@ export async function orquestrarIA(t: TarefaIA, limites: LimitesIA, p: PortasIA)
   // Pendência humana usa a identidade e os fatos registrados, sem reinferir,
   // consultar ferramenta novamente ou renovar o orçamento de chamadas.
   if (reserva.decisao?.estado === "apoio_pendente") return apoio(reserva.decisao.motivo, reserva.decisao.fontes);
-  async function chamar<T>(executar: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  async function chamar<T>(executar: (signal: AbortSignal) => Promise<T>, semCustoApi = false): Promise<T> {
     const restante = limites.maxDuracaoMs - (agora() - inicio);
     const c = await p.repositorio.contexto(t);
-    if (p.cancelamento?.aborted || restante <= 0 || !contextoAtualIA(t, c) || !await p.autorizar(t.atorId, "ia.processar", c) || !await p.repositorio.reservarChamada(t.id, lease, limites, agora())) throw Error("IA_LIMITE_OU_CONTEXTO");
+    if (p.cancelamento?.aborted || restante <= 0 || !contextoAtualIA(t, c) || !await p.autorizar(t.atorId, "ia.processar", c) || !await p.repositorio.reservarChamada(t.id, lease, limites, agora(), semCustoApi)) throw Error("IA_LIMITE_OU_CONTEXTO");
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<never>((_, rejeitar) => { timer = setTimeout(() => { controller.abort(); rejeitar(Error("IA_TIMEOUT")); }, Math.min(restante, limites.timeoutChamadaMs)); });
@@ -126,10 +127,11 @@ export async function orquestrarIA(t: TarefaIA, limites: LimitesIA, p: PortasIA)
     // Dados comerciais mutáveis nunca são recuperados de memória antiga.
     // Em produto, catálogo e conhecimento saem numa só chamada reservada: a
     // venda precisa das opções e das orientações (presente, personalização).
+    // Consultas não chamam a API do modelo: contam na tarefa, sem gastar o limite diário.
     const lidas = ferramenta ? await chamar(async signal => {
       const atuais = await p.ferramenta(ferramenta, t, signal);
       return { atuais, conhecimento: t.tema === 'produto' ? await p.conhecimento(t) : [] };
-    }) : { atuais: [] as FonteIA[], conhecimento: await chamar(() => p.conhecimento(t)) };
+    }, true) : { atuais: [] as FonteIA[], conhecimento: await chamar(() => p.conhecimento(t), true) };
     if (!Array.isArray(lidas.atuais) || !Array.isArray(lidas.conhecimento) || lidas.atuais.length + lidas.conhecimento.length > 50) return apoio("FONTE_INVALIDA");
     // Composição e orientação estáticas podem vir do conhecimento aprovado.
     // Preço, estoque, frete, agenda e pedido exigem a fonte atual da ferramenta.
