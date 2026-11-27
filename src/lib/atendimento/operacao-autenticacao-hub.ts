@@ -12,13 +12,17 @@ const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
 const nomeCookie='donatella_operacao_v2';
 const cookie=(req:IncomingMessage)=>{const a=(req.headers.cookie??'').split(';').map(x=>x.trim()).filter(x=>x.startsWith(nomeCookie+'='));if(a.length!==1)return null;const v=a[0].slice(nomeCookie.length+1);return /^[a-zA-Z0-9_-]{43}$/.test(v)?v:null;};
 const iguais=(a:string,b:string)=>{const x=Buffer.from(a),y=Buffer.from(b);return x.length===y.length&&timingSafeEqual(x,y);};
-export function criarAutenticacaoHub(c:{central:Pool;local:Pool;origem:string;csrfSecret:string}){
+export function criarAutenticacaoHub(c:{central:Pool;local:Pool;origem:string;csrfSecret:string;cacheIdentidadeMs?:number}){
  if(c.origem!=='https://atendimento.grazinghub.com.br'&&c.origem!=='http://127.0.0.1:4194')throw Error('ORIGEM_ACESSO_RECUSADA');
  if(c.csrfSecret.length<32)throw Error('ACESSO_NAO_CONFIGURADO');
  const segura=c.origem.startsWith('https:');
  const emitir=(res:ServerResponse,token:string,idade:number)=>res.setHeader('Set-Cookie',`${nomeCookie}=${token}; Path=/; HttpOnly; SameSite=Lax; ${segura?'Secure; ':''}Max-Age=${idade}`);
  const csrf=(token:string)=>createHmac('sha256',c.csrfSecret).update('csrf:'+token).digest('base64url');
- async function central(id:string){const r=await c.central.query<Usuario>('SELECT * FROM atendimento_integracao.identidade WHERE id=$1',[id]);return r.rows.length===1?r.rows[0]:null;}
+ async function consultarCentral(id:string){const r=await c.central.query<Usuario>('SELECT * FROM atendimento_integracao.identidade WHERE id=$1',[id]);return r.rows.length===1?r.rows[0]:null;}
+ // Memória curta e opcional da identidade do HUB. Consultas simultâneas do mesmo
+ // usuário compartilham uma leitura; falha nunca fica guardada. O login relê sempre.
+ const cacheMs=Math.min(Math.max(c.cacheIdentidadeMs??0,0),5000),cache=new Map<string,{ate:number;valor:Promise<Usuario|null>}>();
+ function central(id:string,reler=false):Promise<Usuario|null>{if(!cacheMs||reler)return consultarCentral(id);const agora=Date.now(),guardada=cache.get(id);if(guardada&&guardada.ate>agora)return guardada.valor;if(cache.size>500)for(const [k,v] of cache)if(v.ate<=agora)cache.delete(k);const valor=consultarCentral(id);cache.set(id,{ate:agora+cacheMs,valor});valor.catch(()=>{if(cache.get(id)?.valor===valor)cache.delete(id);});return valor;}
  async function vinculo(id:string,tx:Pool|PoolClient=c.local){return (await tx.query('SELECT 1 FROM atendimento_acesso.vinculo WHERE hub_usuario_id=$1 AND ativo',[id])).rowCount===1;}
  const identidade=(u:Usuario):IdentidadeOperacaoHub=>({id:u.id,nome:u.nome,perfilId:u.perfilId??'',sessaoVersao:u.sessaoVersao,permissoes:permitidas(u),tipo:'usuario'});
  async function autenticar(req:IncomingMessage){const token=cookie(req);if(!token)return null;const s=await c.local.query<{hub_usuario_id:string;versao:number}>('SELECT hub_usuario_id,versao FROM atendimento_acesso.sessao WHERE token_hash=$1 AND revogada_em IS NULL AND expira_em>now()',[hash(token)]);if(s.rows.length!==1)return null;const u=await central(s.rows[0].hub_usuario_id);if(!u||!u.ativo||u.senhaDefinida===false||u.excluido||u.sessaoVersao!==s.rows[0].versao||!await vinculo(u.id))return null;return identidade(u);}
@@ -32,7 +36,7 @@ export function criarAutenticacaoHub(c:{central:Pool;local:Pool;origem:string;cs
   const r=await c.central.query<Usuario>('SELECT * FROM atendimento_integracao.identidade WHERE lower(email)=$1',[email]);const u=r.rows.length===1?r.rows[0]:null;
   const senhaValida=!!u&&u.ativo&&!u.excluido&&u.senhaDefinida!==false&&permitidas(u).includes('consultar')&&await bcrypt.compare(senha,u.senhaHash);
   // Relê a identidade depois do hash para recusar uma redefinição concorrente.
-  const atual=senhaValida?await central(u.id):null;
+  const atual=senhaValida?await central(u.id,true):null;
   const elegivel=!!atual&&atual.ativo&&!atual.excluido&&atual.senhaDefinida!==false&&atual.senhaHash===u!.senhaHash&&atual.sessaoVersao===u!.sessaoVersao&&permitidas(atual).includes('consultar');
   // O vínculo local é técnico. A permissão continua vindo do HUB.
   // DO NOTHING preserva qualquer vínculo que tenha sido revogado explicitamente.

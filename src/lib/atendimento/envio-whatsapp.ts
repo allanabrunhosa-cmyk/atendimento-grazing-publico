@@ -17,7 +17,9 @@ export async function enviarTextoWhatsApp(p:PedidoEnvioTexto,c:Configuracao,reva
  if(!/^\d{5,25}$/.test(c.numeroId)||!/^v\d{1,2}\.0$/.test(c.versao)||!c.token||c.token.length>8192||!['homologacao','operacao'].includes(c.modo))throw Error('ENVIO_CONFIGURACAO_INVALIDA');
  if(c.modo==='homologacao'&&!c.destinatariosAutorizados.includes(p.destinatario))throw Error('DESTINATARIO_NAO_AUTORIZADO');
  if(!await revalidar())throw Error('ENVIO_ACESSO_REVOGADO');
- const body=JSON.stringify({messaging_product:'whatsapp',recipient_type:'individual',to:p.destinatario,type:'text',text:{body:p.texto,preview_url:false},...(p.respostaA?{context:{message_id:p.respostaA}}:{})});
+ // A Meta devolve biz_opaque_callback_data nos status. Com o ID da intenção,
+ // um aceite cujo recibo se perdeu é conciliado pelo webhook, sem novo POST.
+ const body=JSON.stringify({messaging_product:'whatsapp',recipient_type:'individual',to:p.destinatario,type:'text',text:{body:p.texto,preview_url:false},biz_opaque_callback_data:p.id,...(p.respostaA?{context:{message_id:p.respostaA}}:{})});
  try{
   const r=await transporte(`https://graph.facebook.com/${c.versao}/${c.numeroId}/messages`,{method:'POST',headers:{Authorization:'Bearer '+c.token,'Content-Type':'application/json'},body,redirect:'error',signal:AbortSignal.timeout(30000),cache:'no-store'});
   if(!r.body||r.status>=500||r.status<200||r.status>=300&&r.status<400)return {estado:'incerto',codigo:'META_RESULTADO_DESCONHECIDO'};

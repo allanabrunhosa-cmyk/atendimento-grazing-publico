@@ -29,7 +29,7 @@ export function criarHandlerOperacao(o:OpcoesHandlerOperacao){let ativos=0,midia
   res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Connection':'keep-alive','X-Accel-Buffering':'no'});res.setTimeout(0);res.flushHeaders();
   const gravar=(texto:string)=>{if(!fechado&&!res.destroyed){if(!res.write(texto))fechar();}};
   let novaMensagemPendente=false;
-  const avisar=(novaMensagem=false)=>{novaMensagemPendente ||= novaMensagem;if(fechado||debounce)return;debounce=setTimeout(()=>{debounce=null;gravar('event: alteracao\ndata: '+JSON.stringify({novaMensagem:novaMensagemPendente})+'\n\n');novaMensagemPendente=false;},350);};
+  const avisar=(novaMensagem=false)=>{novaMensagemPendente ||= novaMensagem;if(fechado||debounce)return;debounce=setTimeout(()=>{debounce=null;gravar('event: alteracao\ndata: '+JSON.stringify({novaMensagem:novaMensagemPendente})+'\n\n');novaMensagemPendente=false;},100);};
   const desobservar=o.repo.observarChat(avisar);
   const fechar=()=>{if(fechado)return;fechado=true;encerradores.delete(fechar);clearInterval(heartbeat);clearTimeout(prazo);if(debounce)clearTimeout(debounce);desobservar();totalFluxos--;const n=(fluxos.get(i.id)??1)-1;if(n)fluxos.set(i.id,n);else fluxos.delete(i.id);res.end();};
   const heartbeat=setInterval(()=>{if(ocupado||fechado)return;ocupado=true;void (async()=>{try{const atual=await o.autenticar(req);if(!atual||atual.id!==i.id||!await o.repo.autorizar(atual,'consultar')){gravar('event: acesso\ndata: {}\n\n');fechar();}else gravar(': vivo\n\n');}catch{fechar();}finally{ocupado=false;}})();},15000);
