@@ -11,8 +11,8 @@ const DADOS_PESSOAIS=/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?:\+?55\s*)?\(?\d{2}\)?[\s
  * tom. As regras fixas do sistema continuam valendo por cima dele. */
 export default function PromptCentralDonatella({cliente,sessao,falhar,avisar,alteracoes}:Props){
  const podeEditar=sessao.usuario.permissoes.includes('ia.editar');
- const [base,setBase]=useState<PromptCentralOperacao|null>(null),[texto,setTexto]=useState(''),[ocupado,setOcupado]=useState(false);
- const carregar=useCallback(async()=>{await Promise.resolve();setOcupado(true);try{const p=await cliente.promptCentral();setBase(p);setTexto(p.texto);}catch(e){falhar(e);}finally{setOcupado(false);}},[cliente,falhar]);
+ const [base,setBase]=useState<PromptCentralOperacao|null>(null),[texto,setTexto]=useState(''),[ocupado,setOcupado]=useState(false),[falhou,setFalhou]=useState(false);
+ const carregar=useCallback(async()=>{await Promise.resolve();setOcupado(true);setFalhou(false);try{const p=await cliente.promptCentral();setBase(p);setTexto(p.texto);}catch(e){setFalhou(true);falhar(e);}finally{setOcupado(false);}},[cliente,falhar]);
  useEffect(()=>{let vivo=true;queueMicrotask(()=>{if(vivo)void carregar();});return()=>{vivo=false;};},[carregar]);
  const dirty=!!base&&texto.trim()!==base.texto.trim(),dadosPessoais=DADOS_PESSOAIS.test(texto),valido=texto.length<=LIMITE_PROMPT_CENTRAL&&!dadosPessoais;
  useEffect(()=>{alteracoes?.('prompt-agente',dirty);return()=>alteracoes?.('prompt-agente',false);},[alteracoes,dirty]);
@@ -41,6 +41,6 @@ export default function PromptCentralDonatella({cliente,sessao,falhar,avisar,alt
    {!texto.trim()&&<p role="status">Sem prompt central, a Donatella responde só com as regras fixas, as skills e o tom de voz.</p>}
    <div className="toolbar"><button className="btn" disabled={ocupado||!dirty} onClick={()=>setTexto(base.texto)}>Descartar alterações</button><button className="btn primary" disabled={ocupado||!dirty||!valido||!podeEditar} onClick={()=>void salvar()}><Check size={16}/>Salvar prompt central</button></div>
    {!podeEditar&&<p className="muted">Editar exige a permissão de editar a IA no HUB.</p>}
-  </>:<p role="status">{ocupado?'Conferindo o prompt central…':'Prompt central ainda não consultado.'}</p>}
+  </>:falhou&&!ocupado?<div className="toolbar"><p role="status">Não foi possível ler o prompt central agora.</p><button className="btn" onClick={()=>void carregar()}>Tentar novamente</button></div>:<p role="status">{ocupado?'Conferindo o prompt central…':'Prompt central ainda não consultado.'}</p>}
  </section>;
 }
