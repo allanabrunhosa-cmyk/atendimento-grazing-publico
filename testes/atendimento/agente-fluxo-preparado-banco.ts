@@ -39,6 +39,9 @@ const worker=new WorkerOperacao(repo,{} as RepositorioEntradaPg,async(id,tipo)=>
 const atual=()=>agente.repositorio.configuracao();
 const mudar=async(acao:'ligar'|'pausar')=>agente.controlar(ana,{acao,versao:(await atual()).versao,idempotencia:randomUUID()});
 const quantidade=async(tabela:string,filtro='',valores:unknown[]=[])=>{if(!['mensagem','intencao','agente_tarefa','timer','alerta_apoio'].includes(tabela))throw Error('TABELA_FICTICIA_RECUSADA');return Number((await pool.query(`SELECT count(*)::int total FROM atendimento_operacao.${tabela} ${filtro}`,valores)).rows[0].total);};
+// Limite diário da API reservado hoje e reserva da tarefa, em centavos.
+const reservadoHoje=async()=>Number((await pool.query("SELECT coalesce(sum(reservado_centavos),0)::int total FROM atendimento_operacao.agente_orcamento WHERE empresa_id='grazing'")).rows[0].total);
+const reservaTarefa=async(conversaId:string)=>Number((await pool.query('SELECT custo_reservado_centavos FROM atendimento_operacao.agente_tarefa WHERE conversa_id=$1',[conversaId])).rows[0].custo_reservado_centavos);
 const intencao=async(conversaId:string)=>(await pool.query<IntencaoOperacao>('SELECT * FROM atendimento_operacao.intencao WHERE conversa_id=$1 ORDER BY criada_em DESC,id DESC LIMIT 1',[conversaId])).rows[0];
 const versaoConversa=async(id:string)=>Number((await pool.query('SELECT versao FROM atendimento_operacao.conversa WHERE id=$1',[id])).rows[0].versao);
 let sequencia=970000,ativadaEm='';
@@ -61,6 +64,10 @@ try{
  const primeira=await receber();igual(await quantidade('agente_tarefa'),1);igual(await materializarEventoOperacao(repo,primeira.evento),{duplicada:true});igual(await quantidade('agente_tarefa'),1);igual(await quantidade('mensagem'),1);
  const processada=await agente.processarProxima();igual(processada.estado,'rascunho');igual(chamadasModelo,1);igual(await quantidade('intencao'),1);
  const registro=(await pool.query('SELECT decisao,intencao_id,automatico_preparado FROM atendimento_operacao.agente_tarefa WHERE conversa_id=$1',[primeira.conversaId])).rows[0];igual(registro.decisao.motivo,MOTIVO_RESPOSTA_REDIGIDA);igual(registro.decisao.texto,textoRedigido);igual(registro.automatico_preparado,true);ok(registro.intencao_id);
+ // A consulta ao conhecimento não gasta o limite da API. A chamada ao modelo reserva
+ // 50 centavos e devolve o que os tokens não usaram: 200 de entrada e 40 de saída
+ // no Sonnet 4.5 ficam em 1 centavo. A reserva da tarefa continua com os 50.
+ igual(await reservadoHoje(),1);igual(await reservaTarefa(primeira.conversaId),50);
  const primeiraIntencao=await intencao(primeira.conversaId);igual(primeiraIntencao.autor_id,IDENTIDADE_AGENTE.id);igual(primeiraIntencao.conteudo.autorContexto,{id:IDENTIDADE_AGENTE.id,perfilId:IDENTIDADE_AGENTE.perfilId,sessaoVersao:IDENTIDADE_AGENTE.sessaoVersao,tipo:'ia'});igual(await agente.validarEnvioIA(primeiraIntencao),true);igual((await agente.processarProxima()).estado,'sem_pendencias');igual(chamadasModelo,1);igual(await quantidade('intencao'),1);
  const enviada=await worker.enviarProximo();igual(enviada.estado,'aceito_simulado');igual(simulacoes,1);ok(validacoesWorker>0);igual((await intencao(primeira.conversaId)).conteudo.texto,textoRedigido);igual((await pool.query('SELECT estado FROM atendimento_operacao.intencao WHERE id=$1',[primeiraIntencao.id])).rows[0].estado,'aceito_simulado');igual(await quantidade('mensagem',"WHERE autor='ia'"),1);
  igual((await worker.enviarProximo()).estado,'vazio');igual(simulacoes,1);igual((await agente.processarProxima()).estado,'sem_pendencias');igual(chamadasModelo,1);
@@ -72,6 +79,8 @@ try{
  const terceira=await receber();antesResposta=async()=>{await repo.agir(ana,terceira.conversaId,{acao:'assumir',versao:await versaoConversa(terceira.conversaId),idempotencia:randomUUID()});};
  igual((await agente.processarProxima()).estado,'invalidado');igual(chamadasModelo,3);igual(await quantidade('intencao','WHERE conversa_id=$1',[terceira.conversaId]),0);igual((await worker.enviarProximo()).estado,'vazio');igual(simulacoes,1);
  igual(await quantidade('timer'),0);igual(await quantidade('alerta_apoio'),0);igual(Number((await pool.query('SELECT count(*)::int total FROM atendimento_operacao.agente_consumo WHERE resultado=\'concluida\'')).rows[0].total),3);
+ // Três chamadas concluídas ao modelo, inclusive a da resposta descartada pela tomada humana: 1 centavo cada.
+ igual(await reservadoHoje(),3);
  await mudar('pausar');agente=criarAgente();igual((await atual()).configuracao.modo,'desligado');igual(await agente.processarProxima(),{estado:'desligado'});igual((await worker.enviarProximo()).estado,'vazio');igual(chamadasExternas,0);
  console.log(JSON.stringify({ensaio:'agente-fluxo-preparado',assercoes,chamadasModeloSimuladas:chamadasModelo,enviosSimulados:simulacoes,validacoesWorker,chamadasMetaReais:0,chamadasApiPagas:0,chamadasExternas,modoFinal:'desligado',dados:'ficticios',fluxo:'materializacao_orquestrador_redacao_pg_validacao_worker_simulado',tomadaHumana:'pendente_e_durante_geracao'}));
 }finally{await pool.end();}

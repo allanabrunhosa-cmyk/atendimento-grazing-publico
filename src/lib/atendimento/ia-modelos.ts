@@ -26,3 +26,26 @@ export const aceitaEsforcoIA = (provedor: string|undefined, modelo: string) => !
  * por milhão) e o Haiku 5.5 (US$ 0,10/0,50) custam menos que o Sonnet 4.5
  * (US$ 3/15), mesmo contando uns 30% a mais de tokens para o mesmo texto. */
 export const MODELOS_RESERVA_REVISADA: readonly string[] = ['claude-sonnet-4-5', 'claude-sonnet-4-5-20250929', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
+
+/** Preço da API em US$ por milhão de tokens (entrada, saída). Serve para devolver
+ * ao limite diário a parte da reserva de 50 centavos que a chamada não gastou.
+ * Modelo fora da tabela mantém a reserva inteira. */
+export const PRECO_MODELOS_IA: Readonly<Record<string, { entradaUsd: number; saidaUsd: number }>> = {
+ 'claude-sonnet-4-5': { entradaUsd: 3, saidaUsd: 15 },
+ 'claude-sonnet-4-5-20250929': { entradaUsd: 3, saidaUsd: 15 },
+ 'claude-sonnet-5-5': { entradaUsd: 2, saidaUsd: 10 },
+ 'claude-haiku-5-5': { entradaUsd: 0.1, saidaUsd: 0.5 },
+};
+type ConsumoTokens = { observado: boolean; tokensEntrada?: number; tokensSaida?: number; tokensCacheLeitura?: number; tokensCacheGravacao?: number };
+/** Gasto de uma chamada em centavos de dólar, com folga: toda entrada conta como
+ * gravação de cache (1,25× o preço de entrada) e o total leva mais 25%, arredondado
+ * para cima. `null` quando não há base para estimar: outro provedor, modelo sem
+ * preço ou tokens não informados pela API. */
+export function gastoEstimadoCentavos(provedor: string | undefined, modelo: string, consumo: ConsumoTokens): number | null {
+ if ((provedor ?? 'anthropic') !== 'anthropic' || !Object.prototype.hasOwnProperty.call(PRECO_MODELOS_IA, modelo) || !consumo.observado) return null;
+ const inteiro = (v: number | undefined) => v === undefined || Number.isSafeInteger(v) && v >= 0;
+ if (!Number.isSafeInteger(consumo.tokensEntrada) || !Number.isSafeInteger(consumo.tokensSaida) || !inteiro(consumo.tokensCacheLeitura) || !inteiro(consumo.tokensCacheGravacao)) return null;
+ const preco = PRECO_MODELOS_IA[modelo], entrada = consumo.tokensEntrada! + (consumo.tokensCacheLeitura ?? 0) + (consumo.tokensCacheGravacao ?? 0);
+ const usd = (entrada * preco.entradaUsd * 1.25 + consumo.tokensSaida! * preco.saidaUsd) / 1e6;
+ return Math.max(1, Math.ceil(usd * 100 * 1.25));
+}

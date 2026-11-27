@@ -8,7 +8,7 @@ import type { Pool, PoolClient } from 'pg';
 import { contextoAtualIA, type ContextoIA, type DecisaoIA, type LimitesIA, type PendenciaApoioIA, type RepositorioIA, type TarefaIA, type TemaIA } from './ia-orquestrador';
 import type {ObservacaoConsumoIA} from './ia-provedor-tipos';
 import type {ObservacaoConsumoVoz} from './operacao-ferramentas';
-import {aceitaEsforcoIA,ESFORCOS_IA,type EsforcoIA} from './ia-modelos';
+import {aceitaEsforcoIA,ESFORCOS_IA,gastoEstimadoCentavos,type EsforcoIA} from './ia-modelos';
 
 export type ConfiguracaoAgente = {
  modo: 'desligado'|'rascunho'|'automatico'; provedor?: ProvedorAgente; modelo: string; maxTokens: number; equipeApoio: string;
@@ -88,6 +88,18 @@ export async function invalidarConfiguracaoAgenteTx(tx:PoolClient,empresaId:stri
  await tx.query(`UPDATE atendimento_operacao.timer t SET estado='cancelado',codigo='AGENTE_CONFIGURACAO_ALTERADA' FROM atendimento_operacao.agente_tarefa a WHERE a.empresa_id=$1 AND a.id=(t.conteudo->>'tarefaId')::uuid AND t.estado='pendente'`,[empresaId]);
  await tx.query("UPDATE atendimento_operacao.alerta_apoio SET estado='cancelado',codigo='AGENTE_CONFIGURACAO_ALTERADA',atualizada_em=now() WHERE empresa_id=$1 AND estado='pendente'",[empresaId]);
  return {tarefasInvalidadas:tarefas.rowCount??0,intencoesCanceladas:canceladas.rowCount??0};
+}
+/** Depois da chamada ao modelo, devolve ao limite do dia em que ela foi reservada a
+ * parte da reserva que os tokens não gastaram. Fica com a reserva inteira o
+ * resultado incerto, o consumo sem tokens informados, o modelo sem preço e a chamada
+ * cuja configuração mudou no meio (a reserva daquela versão não é mais conhecida). */
+async function devolverReservaNaoGastaTx(tx:PoolClient,empresaId:string,consumoId:string,versaoTarefa:string,o:ObservacaoConsumoIA){
+ if(o.resultado==='incerta')return;
+ const gasto=gastoEstimadoCentavos(o.provedor,o.modelo,o.consumo);if(gasto===null)return;
+ const cfg=(await tx.query<{conteudo:ConfiguracaoAgente;versao:string}>("SELECT conteudo,versao FROM atendimento_operacao.configuracao WHERE chave='agente'")).rows[0];
+ const reserva=cfg?.conteudo?.limites?.custoPorChamadaCentavos;
+ if(!cfg||String(cfg.versao)!==String(versaoTarefa)||!Number.isSafeInteger(reserva)||reserva<=gasto)return;
+ await tx.query(`UPDATE atendimento_operacao.agente_orcamento o SET reservado_centavos=o.reservado_centavos-$3 FROM atendimento_operacao.agente_consumo c WHERE c.id=$2 AND o.empresa_id=$1 AND o.dia=(c.criada_em AT TIME ZONE 'UTC')::date AND o.reservado_centavos>=$3`,[empresaId,consumoId,reserva-gasto]);
 }
 async function travarConfiguracaoTx(tx:PoolClient){
  const r=await tx.query<{conteudo:ConfiguracaoAgente;versao:string;tom:TomAgente}>(`SELECT a.conteudo,a.versao,t.conteudo tom FROM atendimento_operacao.configuracao a LEFT JOIN atendimento_operacao.configuracao t ON t.chave='agente_tom' WHERE a.chave='agente' FOR SHARE OF a`);if(!r.rows[0])throw Error('AGENTE_CONFIGURACAO_AUSENTE');return r.rows[0];
@@ -226,17 +238,21 @@ export class RepositorioAgentePg implements RepositorioIA {
    const lease=randomUUID();await tx.query('UPDATE atendimento_operacao.agente_tarefa SET lease=$2,lease_ate=$3,atualizada_em=now() WHERE id=$1',[t.id,lease,new Date(agora+leaseMs)]);return {lease,...(a.decisao?{decisao:a.decisao}:{})};
   });
  }
- async reservarChamada(tarefaId:string,lease:string,limites:LimitesIA,agora:number) {
+ /** Reserva uma chamada da tarefa. A chamada ao modelo também reserva no limite diário
+  * da API; a consulta (`semCustoApi`) só conta no número de chamadas da tarefa. */
+ async reservarChamada(tarefaId:string,lease:string,limites:LimitesIA,agora:number,semCustoApi=false) {
   return this.tx(async tx=>{
    const cfg=await travarConfiguracaoTx(tx);
    const a=(await tx.query<{tarefa:TarefaIA;lease:string;lease_ate:Date;decisao:DecisaoIA|null;chamadas:number;custo_reservado_centavos:string;configuracao_versao:string}>('SELECT * FROM atendimento_operacao.agente_tarefa WHERE id=$1 AND empresa_id=$2 FOR UPDATE',[tarefaId,this.empresaId])).rows[0];
-   if(!a||a.configuracao_versao!==cfg.versao||a.lease!==lease||!a.lease_ate||a.lease_ate.getTime()<=agora||a.decisao||a.chamadas>=limites.maxChamadas||Number(a.custo_reservado_centavos)+limites.custoPorChamadaCentavos>limites.maxCustoCentavos)return false;
+   if(!a||a.configuracao_versao!==cfg.versao||a.lease!==lease||!a.lease_ate||a.lease_ate.getTime()<=agora||a.decisao||a.chamadas>=limites.maxChamadas||!semCustoApi&&Number(a.custo_reservado_centavos)+limites.custoPorChamadaCentavos>limites.maxCustoCentavos)return false;
    const c=(await tx.query<{estado:string;versao:string}>('SELECT estado,versao FROM atendimento_operacao.conversa WHERE id=$1 FOR SHARE',[a.tarefa.conversaId])).rows[0];if(c?.estado!=='ia'||Number(c.versao)!==a.tarefa.versao)return false;
    const config=cfg.conteudo;
    if(!config||config.modo==='desligado'||config.custoCentavosDia<limites.custoPorChamadaCentavos)return false;
-   const dia=new Date(agora).toISOString().slice(0,10);await tx.query('INSERT INTO atendimento_operacao.agente_orcamento(empresa_id,dia) VALUES($1,$2) ON CONFLICT DO NOTHING',[this.empresaId,dia]);
-   const b=await tx.query('UPDATE atendimento_operacao.agente_orcamento SET reservado_centavos=reservado_centavos+$3 WHERE empresa_id=$1 AND dia=$2 AND reservado_centavos+$3<=$4 RETURNING reservado_centavos',[this.empresaId,dia,limites.custoPorChamadaCentavos,config.custoCentavosDia]);if(b.rowCount!==1)return false;
-   await tx.query('UPDATE atendimento_operacao.agente_tarefa SET chamadas=chamadas+1,custo_reservado_centavos=custo_reservado_centavos+$2,atualizada_em=now() WHERE id=$1',[tarefaId,limites.custoPorChamadaCentavos]);return true;
+   if(!semCustoApi){
+    const dia=new Date(agora).toISOString().slice(0,10);await tx.query('INSERT INTO atendimento_operacao.agente_orcamento(empresa_id,dia) VALUES($1,$2) ON CONFLICT DO NOTHING',[this.empresaId,dia]);
+    const b=await tx.query('UPDATE atendimento_operacao.agente_orcamento SET reservado_centavos=reservado_centavos+$3 WHERE empresa_id=$1 AND dia=$2 AND reservado_centavos+$3<=$4 RETURNING reservado_centavos',[this.empresaId,dia,limites.custoPorChamadaCentavos,config.custoCentavosDia]);if(b.rowCount!==1)return false;
+   }
+   await tx.query('UPDATE atendimento_operacao.agente_tarefa SET chamadas=chamadas+1,custo_reservado_centavos=custo_reservado_centavos+$2,atualizada_em=now() WHERE id=$1',[tarefaId,semCustoApi?0:limites.custoPorChamadaCentavos]);return true;
   });
  }
  async preservarApoio(t:TarefaIA,lease:string,d:PendenciaApoioIA,agora:number):Promise<PendenciaApoioIA|null> {return this.tx(async tx=>{
@@ -297,6 +313,7 @@ export class RepositorioAgentePg implements RepositorioIA {
    const h=hashConfiguracaoAgente({provedor:o.provedor,modelo:o.modelo,resultado:o.resultado,consumo});
    const r=await tx.query("UPDATE atendimento_operacao.agente_consumo SET resultado=$4,consumo=$5::jsonb,hash=$6,concluida_em=now() WHERE tarefa_id=$1 AND operacao='inferencia' AND chamada=$2 AND provedor=$3 AND modelo=$7 AND concluida_em IS NULL RETURNING id",[t.id,a.chamadas,o.provedor,o.resultado,JSON.stringify(consumo),h,o.modelo]);
    if(!r.rowCount){const antiga=(await tx.query<{hash:string}>("SELECT hash FROM atendimento_operacao.agente_consumo WHERE tarefa_id=$1 AND operacao='inferencia' AND chamada=$2",[t.id,a.chamadas])).rows[0];if(antiga?.hash!==h)throw Error('AGENTE_CONSUMO_DIVERGENTE');}
+   else await devolverReservaNaoGastaTx(tx,this.empresaId,(r.rows[0] as {id:string}).id,a.configuracao_versao,o);
   });
  }
  async registrarConsumoVoz(t:TarefaIA,o:ObservacaoConsumoVoz){
