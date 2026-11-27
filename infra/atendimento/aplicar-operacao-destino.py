@@ -59,5 +59,5 @@ for banco in ['donatella_entrada','donatella_ensaio_entrada']:
 for banco in ['donatella_operacao','donatella_ensaio_operacao','donatella_entrada','donatella_ensaio_entrada']:
  papel='donatella_entrada_app' if banco.endswith('entrada') else 'donatella_operacao_app'
  sql('postgres',f'REVOKE CONNECT ON DATABASE {banco} FROM PUBLIC; GRANT CONNECT ON DATABASE {banco} TO {papel},donatella_operacao_backup;')
-sql('postgres','ALTER ROLE donatella_operacao_app CONNECTION LIMIT 8; ALTER ROLE donatella_entrada_app CONNECTION LIMIT 6;')
+sql('postgres','ALTER ROLE donatella_operacao_app CONNECTION LIMIT 16; ALTER ROLE donatella_entrada_app CONNECTION LIMIT 6;')
 print(json.dumps({'migrationsAdicionadas':len(aplicadas),'vinculoRevisadoReutilizado':True,'grantsOrigemCopiados':False,'bancoHubRestaurado':False,'envios':0,'webhookAlterado':False}))
