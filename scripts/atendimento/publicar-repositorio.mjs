@@ -29,12 +29,14 @@ copyFileSync('infra/atendimento/publicar-repositorio.py',join(release,'publicar-
 const destination=`${remoteRoot}/candidatas/repositorio-${commit}-${Date.now()}`;
 const archive=join(root,'.tmp-homologacao',`publicacao-${commit}.tar.gz`);
 mkdirSync(join(root,'.tmp-homologacao'),{recursive:true});
-execFileSync('tar',['-czf',archive,'-C',release,'operacao.mjs','web','release.json','publicar-repositorio.py']);
+// No macOS, o tar grava etiquetas do sistema como arquivos ._, e a VPS recusa a web com arquivos a mais.
+execFileSync('tar',['-czf',archive,'-C',release,'operacao.mjs','web','release.json','publicar-repositorio.py'],{env:{...process.env,COPYFILE_DISABLE:'1'}});
 output('ssh',[...ssh,host,`umask 077; mkdir -p ${destination}`]);
 output('scp',[...ssh,archive,`${host}:${destination}/pacote.tar.gz`]);
 output('ssh',[...ssh,host,`tar -xzf ${destination}/pacote.tar.gz -C ${destination}`]);
 const command=`python3 ${destination}/publicar-repositorio.py --raiz-remota ${remoteRoot} --raiz-checkpoint ${checkpointRoot} --lock-drive ${backupLockDrive} --lock-checkpoint ${backupLockCheckpoint} --candidata ${destination} --manifesto-anterior ${prior} --commit ${commit}${apply?' --aplicar':''}`;
 let receipt;
-try{receipt=JSON.parse(output('ssh',[...ssh,host,command]));}catch{throw Error('PUBLICACAO_INTERROMPIDA_CONFERIR_VPS');}
+// A VPS só devolve o código do erro, sem saídas de comandos; ele vai junto para indicar o que conferir.
+try{receipt=JSON.parse(output('ssh',[...ssh,host,command]));}catch(e){let erro;try{erro=JSON.parse(String(e?.stdout??'')).erro;}catch{}throw Error('PUBLICACAO_INTERROMPIDA_CONFERIR_VPS'+(typeof erro==='string'&&/^[A-Za-z_]{1,80}$/.test(erro)?': '+erro:''));}
 if(!apply)writeFileSync(proofFile,JSON.stringify({commit,repositorio:official,alvoSha256,manifestoAnterior:prior,verificadaEm:new Date().toISOString()}));
 console.log(JSON.stringify(receipt));
